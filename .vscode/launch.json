@@ -2,10 +2,10 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "C/C++: 调试 qtds (CMake + Qt6 + MinGW)",
+            "name": "C/C++: Debug stv3d-lab (CMake + Qt6 + MinGW)",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}\\build\\qtds.exe",
+            "program": "${workspaceFolder}\\build\\stv3d-lab.exe",
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
@@ -20,7 +20,7 @@
             "miDebuggerPath": "D:\\MinGW\\bin\\gdb.exe",
             "setupCommands": [
                 {
-                    "description": "为 gdb 启用整齐打印",
+                    "description": "Enable pretty-printing for gdb",
                     "text": "-enable-pretty-printing",
                     "ignoreFailures": true
                 }

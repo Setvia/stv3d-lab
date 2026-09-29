@@ -35,7 +35,7 @@
             },
             "dependsOrder": "sequence",
             "dependsOn": "cmake: configure (mingw preset)",
-            "detail": "Configure + build qtds (Qt6 + vcpkg/cpr). Output: build/qtds.exe with runtime DLLs deployed."
+            "detail": "Configure + build stv3d-lab (Qt6 + vcpkg/cpr). Output: build/stv3d-lab.exe with runtime DLLs deployed."
         }
     ]
 }

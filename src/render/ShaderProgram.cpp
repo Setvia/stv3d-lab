@@ -1,4 +1,4 @@
-#include "myShader.h"
+#include "ShaderProgram.h"
 
 #include <QByteArray>
 #include <QDebug>
@@ -7,18 +7,19 @@
 
 #include <utility>
 
-// ---------------- 构造 / 析构 / 移动 ----------------
+// ---------------- construction / destruction / move ----------------
 
 MyShaderProgram::~MyShaderProgram()
 {
-    // 注意：这里要求调用方保证"当前有 GL 上下文"（MyGLWidget 在 makeCurrent() 之后析构）
+    // Note: the caller must guarantee a "current GL context" here
+    // (MyGLWidget is destroyed after makeCurrent())
     destroy();
 }
 
 MyShaderProgram::MyShaderProgram(MyShaderProgram &&other) noexcept
     : m_program(other.m_program), m_uniform_cache(std::move(other.m_uniform_cache))
 {
-    other.m_program = 0;  // 句柄所有权转移，避免源对象析构时删除
+    other.m_program = 0;  // handle ownership transfer, so the source does not delete it when destroyed
 }
 
 MyShaderProgram &MyShaderProgram::operator=(MyShaderProgram &&other) noexcept
@@ -35,25 +36,25 @@ MyShaderProgram &MyShaderProgram::operator=(MyShaderProgram &&other) noexcept
     return *this;
 }
 
-// ---------------- 文件读取 ----------------
+// ---------------- file reading ----------------
 
 bool MyShaderProgram::readTextFile(const QString &path, QString &outText)
 {
-    QFile file(path);  // QFile 原生支持 Qt 资源路径（":/shaders/basic.vert"）
+    QFile file(path);  // QFile natively supports Qt resource paths (":/shaders/basic.vert")
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        qCritical().noquote() << "着色器文件无法打开:" << path;
+        qCritical().noquote() << "cannot open shader file:" << path;
         return false;
     }
 
     outText = QString::fromUtf8(file.readAll());
     if (outText.trimmed().isEmpty()) {
-        qCritical().noquote() << "着色器文件为空:" << path;
+        qCritical().noquote() << "shader file is empty:" << path;
         return false;
     }
     return true;
 }
 
-// ---------------- 创建 / 释放 ----------------
+// ---------------- create / destroy ----------------
 
 bool MyShaderProgram::createFromFiles(const QString &vertexPath,
                                       const QString &fragmentPath,
@@ -63,7 +64,7 @@ bool MyShaderProgram::createFromFiles(const QString &vertexPath,
     QString fragment_source;
 
     if (!readTextFile(vertexPath, vertex_source) || !readTextFile(fragmentPath, fragment_source)) {
-        return false;  // 读文件失败时不会碰任何 GL 状态
+        return false;  // no GL state is touched when reading the files fails
     }
 
     if (!createFromSource(vertex_source, fragment_source, attributeBindings)) {
@@ -79,19 +80,20 @@ bool MyShaderProgram::createFromSource(const QString &vertexSource,
                                        const QString &fragmentSource,
                                        const std::vector<AttributeBinding> &attributeBindings)
 {
-    // 先显式确认"当前有 GL 上下文"：没有上下文时直接调 initializeOpenGLFunctions()
-    // 会踩到 Qt 内部的空指针（实测会崩溃），所以这里必须自己拦住
+    // Check explicitly for a "current GL context" first: without a context, calling
+    // initializeOpenGLFunctions() directly hits a null pointer inside Qt (it does crash in practice),
+    // so we must block it here
     if (QOpenGLContext::currentContext() == nullptr) {
-        qCritical("没有当前 OpenGL 上下文，无法创建着色器程序（请在 initializeGL() 里创建）");
+        qCritical("No current OpenGL context; cannot create the shader program (create it inside initializeGL())");
         return false;
     }
 
     if (!initializeOpenGLFunctions()) {
-        qCritical("无法加载 OpenGL 4.3 Core 函数（上下文版本过低）");
+        qCritical("Failed to load the OpenGL 4.3 Core functions (context version too low)");
         return false;
     }
 
-    destroy();  // 重复创建时先释放旧的
+    destroy();  // release the old program first when creating again
 
     const GLuint vs = compileShader(GL_VERTEX_SHADER, vertexSource, "vertex shader");
     const GLuint fs = compileShader(GL_FRAGMENT_SHADER, fragmentSource, "fragment shader");
@@ -101,7 +103,7 @@ bool MyShaderProgram::createFromSource(const QString &vertexSource,
 
     const bool linked = linkProgram(vs, fs, attributeBindings);
 
-    // 无论成败都清理 shader 对象（链接后它们已无用）
+    // Clean up the shader objects regardless of success (they are useless after linking)
     glDetachShader(m_program, vs);
     glDetachShader(m_program, fs);
     glDeleteShader(vs);
@@ -111,7 +113,7 @@ bool MyShaderProgram::createFromSource(const QString &vertexSource,
         return false;
     }
 
-    m_uniform_cache.clear();  // 新程序的 uniform 位置需要重新查询
+    m_uniform_cache.clear();  // uniform locations must be queried again for the new program
     return true;
 }
 
@@ -124,11 +126,11 @@ void MyShaderProgram::destroy()
     m_uniform_cache.clear();
 }
 
-// ---------------- 编译 / 链接 ----------------
+// ---------------- compile / link ----------------
 
 GLuint MyShaderProgram::compileShader(GLenum type, const QString &source, const QString &label)
 {
-    const QByteArray utf8 = source.toUtf8();  // GLSL 用字节流，Qt 字符串先转 UTF-8
+    const QByteArray utf8 = source.toUtf8();  // GLSL takes a byte stream, so convert the Qt string to UTF-8 first
 
     const GLuint shader = glCreateShader(type);
     const char *raw = utf8.constData();
@@ -142,7 +144,7 @@ GLuint MyShaderProgram::compileShader(GLenum type, const QString &source, const 
         glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &length);
         QByteArray info(length > 0 ? length : 1, '\0');
         glGetShaderInfoLog(shader, length, nullptr, info.data());
-        qCritical().noquote() << label << "编译失败:" << QString::fromUtf8(info).trimmed();
+        qCritical().noquote() << label << "compile failed:" << QString::fromUtf8(info).trimmed();
         glDeleteShader(shader);
         return 0;
     }
@@ -156,7 +158,7 @@ bool MyShaderProgram::linkProgram(GLuint vertexShader, GLuint fragmentShader,
     glAttachShader(m_program, vertexShader);
     glAttachShader(m_program, fragmentShader);
 
-    // 显式绑定属性号（与 shader 里的 layout(location = N) 双保险）
+    // Explicitly bind the attribute numbers (belt and braces alongside layout(location = N) in the shader)
     for (const AttributeBinding &binding : attributeBindings) {
         glBindAttribLocation(m_program, binding.location, binding.name);
     }
@@ -170,7 +172,7 @@ bool MyShaderProgram::linkProgram(GLuint vertexShader, GLuint fragmentShader,
         glGetProgramiv(m_program, GL_INFO_LOG_LENGTH, &length);
         QByteArray info(length > 0 ? length : 1, '\0');
         glGetProgramInfoLog(m_program, length, nullptr, info.data());
-        qCritical().noquote() << "program 链接失败:" << QString::fromUtf8(info).trimmed();
+        qCritical().noquote() << "program link failed:" << QString::fromUtf8(info).trimmed();
         glDeleteProgram(m_program);
         m_program = 0;
         return false;
@@ -178,7 +180,7 @@ bool MyShaderProgram::linkProgram(GLuint vertexShader, GLuint fragmentShader,
     return true;
 }
 
-// ---------------- 使用 ----------------
+// ---------------- usage ----------------
 
 void MyShaderProgram::bind()
 {
@@ -203,34 +205,35 @@ GLint MyShaderProgram::uniformLocation(const char *name)
     const std::string key(name);
     const auto found = m_uniform_cache.find(key);
     if (found != m_uniform_cache.end()) {
-        return found->second;  // 命中缓存，不再访问 GL
+        return found->second;  // cache hit, no GL access needed
     }
 
     const GLint location = glGetUniformLocation(m_program, name);
     if (location < 0) {
-        qWarning().noquote() << "uniform 未找到（可能被编译器优化掉）:" << name;
+        qWarning().noquote() << "uniform not found (it may have been optimized away by the compiler):" << name;
     }
     m_uniform_cache.emplace(key, location);
     return location;
 }
 
-bool MyShaderProgram::setMat4(const char *name, const QMatrix4x4 &value)
+bool MyShaderProgram::setMat4(const char *name, const mat4 &value)
 {
     const GLint location = uniformLocation(name);
     if (location < 0) {
         return false;
     }
-    glUniformMatrix4fv(location, 1, GL_FALSE, value.constData());
+    // core::mat4 stores its 16 floats column-major, which is exactly what GL expects
+    glUniformMatrix4fv(location, 1, GL_FALSE, value.m);
     return true;
 }
 
-bool MyShaderProgram::setVec3(const char *name, const QVector3D &value)
+bool MyShaderProgram::setVec3(const char *name, const vec3 &value)
 {
     const GLint location = uniformLocation(name);
     if (location < 0) {
         return false;
     }
-    glUniform3f(location, value.x(), value.y(), value.z());
+    glUniform3f(location, value.x, value.y, value.z);
     return true;
 }
 

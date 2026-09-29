@@ -9,7 +9,7 @@
         {
             "name": "mingw",
             "displayName": "MinGW + vcpkg (x64-mingw-dynamic)",
-            "description": "g++ 13 + vcpkg cpr，输出到 build/",
+            "description": "g++ 13 + vcpkg cpr, output goes to build/",
             "generator": "MinGW Makefiles",
             "binaryDir": "${sourceDir}/build",
             "cacheVariables": {

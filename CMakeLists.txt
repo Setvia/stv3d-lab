@@ -1,70 +1,133 @@
-cmake_minimum_required(VERSION 3.21) # 设置 CMake 的最低版本要求
-project(qtds LANGUAGES CXX)  # 设置项目名称和使用的语言
+cmake_minimum_required(VERSION 3.21)
+project(stv3d-lab LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 17) # 设置 C++ 标准为 C++17
-set(CMAKE_CXX_STANDARD_REQUIRED ON) # 设置 C++ 标准为必需
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
-# 让 CMake 自动调用 Qt 工具：moc 处理 Q_OBJECT（否则报 undefined reference to vtable）、
-# uic 处理 .ui、rcc 处理 .qrc
-set(CMAKE_AUTOMOC ON)
-set(CMAKE_AUTOUIC ON)
-set(CMAKE_AUTORCC ON)
+# ---------------------------------------------------------------------------
+# Layered targets. The dependency direction is strictly downward:
+#
+#   stv3d_core          math + CPU geometry. Links NOTHING (no Qt, no OpenGL).
+#                       Adding a Qt/GL include to a core header fails to compile -
+#                       the layering is enforced by the build, not by review.
+#   stv3d_engine        scene-side logic: camera, model instances, character. Links only
+#                       stv3d_core - no Qt, no OpenGL, no window.
+#   stv3d_render_gl     OpenGL backend (still uses Qt's QOpenGLFunctions wrapper).
+#   stv3d_app           the executable: Qt window, input events, scene assembly.
+#   stv3d_core_tests    unit tests for core   (no Qt, no GPU)
+#   stv3d_engine_tests  unit tests for engine (no Qt, no GPU)
+#
+# Future steps: stv3d_render_vk (Vulkan backend), stv3d_platform_qt (window/input/timer
+# implementations). Both plug in below stv3d_app without touching core or engine.
+# ---------------------------------------------------------------------------
 
-# ---------- 依赖：凡是源码里 #include 的第三方库，都在这里显式声明 ----------
-# 规则：一个库 = 一次 find_package + 一次 target_link_libraries，不允许"靠别的库顺带带上"
-# （vcpkg 的每个包都会导出整个 include 前缀根，所以漏写也能编过——那是隐式依赖，必须避免）
-find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGLWidgets Core) # Qt6 图形界面 + OpenGL 控件
-find_package(cpr CONFIG REQUIRED)                           # HTTP 客户端（libcurl 封装）
-find_package(nlohmann_json CONFIG REQUIRED)                 # JSON 解析（头文件库，无链接产物）
+# ---- stv3d_core: zero third-party dependencies -----------------------------
+add_library(stv3d_core STATIC
+    src/core/core_smoke.cpp
+    src/core/math/conventions.h
+    src/core/math/vec2.h
+    src/core/math/vec3.h
+    src/core/math/vec4.h
+    src/core/math/mat3.h
+    src/core/math/mat4.h
+    src/core/math/quat.h
+    src/core/geometry/Vertex.h
+    src/core/geometry/Triangle.h
+    src/core/geometry/MeshData.h
+)
+target_include_directories(stv3d_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+# NOTE: deliberately NO find_package() and NO target_link_libraries() here.
 
-# ---------- 目标 ----------
-# 头文件也列进来：AUTOMOC 需要"看得见"含 Q_OBJECT 的头文件（gameLoop.h），IDE 也靠它建项目视图
-# qtds.qrc：AUTORCC 会把着色器等资源编译进可执行文件（无需运行时拷贝 shader 文件）
-add_executable(qtds
-    main.cpp
-    my3d.h
-    my3d.cpp
-    myCamera.h
-    myCharacter.h
-    myCharacter.cpp
-    myLogManager.h
-    myLogManager.cpp
-    myMesh.h
-    myMesh.cpp
-    myModel.h
-    myShader.h
-    myShader.cpp
-    gameLoop.h
-    gameLoop.cpp
-    qtds.qrc
+# ---- third-party dependencies of the Qt/GL side ---------------------------
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets)
+find_package(cpr CONFIG REQUIRED)            # HTTP client (libcurl wrapper)
+find_package(nlohmann_json CONFIG REQUIRED)  # JSON parsing (header-only, unused so far)
+
+# ---- stv3d_render_gl: OpenGL backend --------------------------------------
+add_library(stv3d_render_gl STATIC
+    src/render/Mesh.cpp
+    src/render/Mesh.h
+    src/render/ShaderProgram.cpp
+    src/render/ShaderProgram.h
+)
+target_link_libraries(stv3d_render_gl
+    PUBLIC stv3d_core
+    PRIVATE Qt6::Core Qt6::Gui Qt6::OpenGL
 )
 
-target_link_libraries(qtds PRIVATE
-    Qt6::Widgets
-    Qt6::OpenGLWidgets
+# ---- stv3d_engine: scene logic, still Qt-free -----------------------------
+# Camera, model instances and the character controller were converted from Qt math types
+# (QVector3D/QQuaternion/QMatrix4x4) to core types (vec3/quat/mat4). They no longer need a
+# window, a GPU or Qt at all, which is what makes them testable in a plain executable.
+add_library(stv3d_engine STATIC
+    src/game/Camera.h
+    src/game/Model.h
+    src/game/Character.cpp
+    src/game/Character.h
+)
+target_link_libraries(stv3d_engine PUBLIC stv3d_core)
+
+# ---- stv3d_app: the executable (Qt lives here and above) ------------------
+# Header files are listed so AUTOMOC can see the Q_OBJECT headers (3d.h, GameLoop.h).
+# stv3d-lab.qrc embeds the shaders into the executable (AUTORCC).
+add_executable(stv3d-lab
+    src/main.cpp
+    src/game/3d.cpp
+    src/game/3d.h
+    src/game/GameLoop.cpp
+    src/game/GameLoop.h
+    src/core/log/LogManager.cpp
+    src/core/log/LogManager.h
+    stv3d-lab.qrc
+)
+set_target_properties(stv3d-lab PROPERTIES
+    AUTOMOC ON
+    AUTOUIC ON
+    AUTORCC ON
+)
+target_link_libraries(stv3d-lab PRIVATE
+    stv3d_core
+    stv3d_engine
+    stv3d_render_gl
     Qt6::Core
+    Qt6::Gui
+    Qt6::Widgets
+    Qt6::OpenGL
+    Qt6::OpenGLWidgets
     cpr::cpr
     nlohmann_json::nlohmann_json
 )
 
-# 构建后自动把 vcpkg 运行时 DLL 复制到 exe 旁边（libcpr/libcurl/zlib），免手动配 PATH
+# ---- unit tests: no Qt, no GPU -------------------------------------------
+enable_testing()
+add_executable(stv3d_core_tests tests/core_math_test.cpp)
+target_link_libraries(stv3d_core_tests PRIVATE stv3d_core)
+add_test(NAME core_math COMMAND stv3d_core_tests)
+
+add_executable(stv3d_engine_tests tests/engine_test.cpp)
+target_link_libraries(stv3d_engine_tests PRIVATE stv3d_engine)
+add_test(NAME engine_scene COMMAND stv3d_engine_tests)
+
+# ---- runtime deployment (Windows) ---------------------------------------
+# Copy the vcpkg runtime DLLs next to the executable so it can be launched directly.
 if(WIN32 AND DEFINED VCPKG_INSTALLED_DIR)
     file(GLOB _VCPKG_RUNTIME_DLLS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/*.dll")
     if(_VCPKG_RUNTIME_DLLS)
-        add_custom_command(TARGET qtds POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_VCPKG_RUNTIME_DLLS} $<TARGET_FILE_DIR:qtds>
-            COMMENT "Copying vcpkg runtime DLLs next to qtds.exe")
+        add_custom_command(TARGET stv3d-lab POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_VCPKG_RUNTIME_DLLS} $<TARGET_FILE_DIR:stv3d-lab>
+            COMMENT "Copying vcpkg runtime DLLs next to stv3d-lab.exe")
     endif()
 endif()
 
-# 构建后自动部署 Qt 运行时（Qt6*.dll、platforms/qwindows.dll、MinGW 运行时），
-# 这样 exe 双击/调试都不需要手动把 Qt bin 加进 PATH
+# Deploy the Qt runtime (Qt6*.dll, platforms/qwindows.dll, MinGW runtime) so that the
+# executable runs by double-click without a manual PATH setup.
 if(WIN32)
     get_filename_component(_QT_BIN_DIR "${Qt6_DIR}/../../../bin" ABSOLUTE)
     find_program(WINDEPLOYQT_EXECUTABLE windeployqt HINTS "${_QT_BIN_DIR}")
     if(WINDEPLOYQT_EXECUTABLE)
-        add_custom_command(TARGET qtds POST_BUILD
-            COMMAND "${WINDEPLOYQT_EXECUTABLE}" --no-translations "$<TARGET_FILE:qtds>"
-            COMMENT "Deploying Qt runtime next to qtds.exe")
+        add_custom_command(TARGET stv3d-lab POST_BUILD
+            COMMAND "${WINDEPLOYQT_EXECUTABLE}" --no-translations "$<TARGET_FILE:stv3d-lab>"
+            COMMENT "Deploying Qt runtime next to stv3d-lab.exe")
     endif()
 endif()

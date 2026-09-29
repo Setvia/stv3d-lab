@@ -1,4 +1,4 @@
-#include "myLogManager.h"
+#include "LogManager.h"
 
 #include <QCoreApplication>
 #include <QDateTime>
@@ -8,7 +8,8 @@
 
 namespace {
 
-// 文件对象与互斥锁放在 .cpp 内部：外部拿不到，只能通过 init()/shutdown() 控制生命周期
+// The file object and mutex are kept inside the .cpp: unreachable from outside, so their
+// lifetime can only be controlled through init()/shutdown()
 QFile *g_log_file = nullptr;
 QMutex g_log_mutex;
 
@@ -16,7 +17,7 @@ QMutex g_log_mutex;
 
 QString MyLogManager::logFilePath()
 {
-    return QCoreApplication::applicationDirPath() + QStringLiteral("/qtds.log");
+    return QCoreApplication::applicationDirPath() + QStringLiteral("/stv3d-lab.log");
 }
 
 bool MyLogManager::isReady()
@@ -26,7 +27,8 @@ bool MyLogManager::isReady()
 
 bool MyLogManager::init()
 {
-    // 静态存储期：生命周期覆盖整个进程，避免"文件对象在栈上、处理器却还活着"的悬垂指针
+    // Static storage duration: the lifetime spans the whole process, avoiding a dangling pointer
+    // if the file object were on the stack while the handler was still alive
     static QFile log_file;
 
     log_file.setFileName(logFilePath());
@@ -34,7 +36,7 @@ bool MyLogManager::init()
         return false;
     }
 
-    log_file.write(QStringLiteral("\n===== qtds start =====\n").toUtf8());
+    log_file.write(QStringLiteral("\n===== stv3d-lab start =====\n").toUtf8());
     log_file.flush();
 
     g_log_file = &log_file;
@@ -65,7 +67,8 @@ void MyLogManager::messageHandler(QtMsgType type, const QMessageLogContext &, co
         case QtFatalMsg:    level = "FATAL"; break;
     }
 
-    // 加锁：可能有其它线程同时写日志；locker 出作用域自动解锁
+    // Lock: other threads may be writing to the log at the same time; the locker unlocks
+    // automatically when it goes out of scope
     QMutexLocker locker(&g_log_mutex);
     if (g_log_file != nullptr && g_log_file->isOpen()) {
         const QString line = QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz"))
@@ -80,6 +83,6 @@ void MyLogManager::messageHandler(QtMsgType type, const QMessageLogContext &, co
     }
 
     if (type == QtFatalMsg) {
-        abort();  // 致命错误必须终止，与 Qt 默认行为一致
+        abort();  // A fatal error must terminate, matching Qt's default behavior
     }
 }

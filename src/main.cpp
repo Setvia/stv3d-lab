@@ -3,14 +3,13 @@
 
 #include <cpr/cpr.h>
 
-#include "myLogManager.h"
-#include "my3d.h"
-
+#include "core/log/LogManager.h"
+#include "game/3d.h"
 
 int main(int argc, char* argv[]) {
-    // 必须在创建 QApplication 之前设置默认 surface 格式：
-    // my3d.cpp 使用了 glVertexAttribFormat / glVertexAttribBinding / glBindVertexBuffer，
-    // 这些是 OpenGL 4.3 才进入核心的显式顶点属性绑定 API。
+    // The default surface format must be set BEFORE QApplication is created:
+    // the renderer uses glVertexAttribFormat / glVertexAttribBinding / glBindVertexBuffer,
+    // which only entered the core profile in OpenGL 4.3.
     QSurfaceFormat fmt;
     fmt.setVersion(4, 3);
     fmt.setProfile(QSurfaceFormat::CoreProfile);
@@ -20,26 +19,27 @@ int main(int argc, char* argv[]) {
 
     QApplication app(argc, argv);
 
-    // 日志：打开 <exe 目录>/qtds.log 并把 Qt 全部日志重定向过去（命令行不再输出任何内容）
+    // Logging: open <exe dir>/stv3d-lab.log and redirect all of Qt's logging there
+    // (nothing is printed to the command line anymore)
     if (!MyLogManager::init()) {
-        return 1;  // 日志都写不了就没必要继续
+        return 1;  // If logging cannot even be opened, there is no point continuing
     }
 
-    // 主窗口创建
+    // Create the main window
     MyGLWidget window;
     window.resize(800, 600);
-    window.setWindowTitle(QStringLiteral("qtds"));
+    window.setWindowTitle(QStringLiteral("stv3d-lab"));
     window.show();
 
-    // 网络请求测试
+    // Network request test
     const cpr::Response r = cpr::Get(cpr::Url{"https://httpbin.org/get"});
     qInfo().noquote() << "Status:" << r.status_code;
     qInfo().noquote() << "Content:" << QString::fromStdString(r.text);
 
     const int exit_code = app.exec();
 
-    // 日志终止处理
-    qInfo().noquote() << "===== qtds exit, code =" << exit_code << "=====";
+    // Log shutdown handling
+    qInfo().noquote() << "===== stv3d-lab exit, code =" << exit_code << "=====";
     MyLogManager::shutdown();
     return exit_code;
 }

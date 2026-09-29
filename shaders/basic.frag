@@ -1,6 +1,6 @@
 #version 330 core
 
-// 直接把顶点色插值结果输出（暂无光照/纹理）
+// Output the interpolated vertex color directly (no lighting or textures yet)
 in vec3 vColor;
 
 out vec4 FragColor;

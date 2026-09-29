@@ -1,7 +1,7 @@
-#include "gameLoop.h"
+#include "GameLoop.h"
 
 namespace {
-constexpr int kDefaultFrameIntervalMs = 16;  // 帧间隔默认 16ms ≈ 60fps
+constexpr int kDefaultFrameIntervalMs = 16;  // default frame interval 16ms ≈ 60fps
 }  // namespace
 
 // ---------------- TaskScheduler ----------------
@@ -12,7 +12,7 @@ void TaskScheduler::addRealTimeTask(Task task) { m_real_time_tasks.push_back(std
 
 void TaskScheduler::onTick(std::uint64_t tickCount)
 {
-    (void)tickCount;  // 目前任务不关心刻号，保留参数以便将来使用
+    (void)tickCount;  // tasks do not care about the tick number yet; the parameter is kept for future use
     for (const Task &task : m_tick_tasks) {
         if (task) {
             task();
@@ -58,7 +58,7 @@ GameLoop::GameLoop(QObject *parent) : QObject(parent)
 void GameLoop::init()
 {
     m_loop_state |= GameLoopFlags::INITIALIZED;
-    m_loop_state |= GameLoopFlags::OVERLOAD;  // 本项目暂无需异步加载的资源
+    m_loop_state |= GameLoopFlags::OVERLOAD;  // this project has no asynchronously loaded resources yet
     m_tick_count = 0;
     m_tick_accumulator = 0.0;
     m_clock.start();
@@ -111,7 +111,7 @@ void GameLoop::enqueue(Task task)
 
 void GameLoop::mainLoop()
 {
-    // ① 待办队列：本帧开始前一次性执行完
+    // (1) pending queue: run it all before this frame starts
     while (!m_task_queue.empty()) {
         Task task = std::move(m_task_queue.front());
         m_task_queue.pop_front();
@@ -124,14 +124,14 @@ void GameLoop::mainLoop()
         return;
     }
 
-    // ② 真实经过时间（秒）
+    // (2) real elapsed time (seconds)
     const double elapsed_seconds = static_cast<double>(m_clock.restart()) / 1000.0;
 
-    // ③ 时间未激活时只跑帧任务（例如暂停逻辑但仍渲染）
+    // (3) when time is not active only frame tasks run (e.g. logic paused but still rendering)
     if ((m_loop_state & GameLoopFlags::TIME_ACTIVE) != 0) {
         m_tick_accumulator += elapsed_seconds;
 
-        // 固定步长推进逻辑：一帧内可能补跑多个逻辑刻，且限制最大补跑次数防止"死亡螺旋"
+        // Advance logic at the fixed timestep: a frame may catch up on several logic ticks, and the catch-up count is capped to prevent a "death spiral"
         constexpr int kMaxSubSteps = 5;
         int steps = 0;
         while (m_tick_accumulator >= m_fixed_tick_seconds && steps < kMaxSubSteps) {
@@ -142,11 +142,11 @@ void GameLoop::mainLoop()
             ++steps;
         }
         if (steps == kMaxSubSteps) {
-            m_tick_accumulator = 0.0;  // 落后太多就丢弃积压，避免越追越慢
+            m_tick_accumulator = 0.0;  // too far behind: drop the backlog so it cannot fall further and further behind
         }
     }
 
-    // ④ 每帧任务
+    // (4) per-frame tasks
     const float dt = static_cast<float>(elapsed_seconds);
     m_scheduler.onFrame(dt);
     m_scheduler.onRealTime(elapsed_seconds);

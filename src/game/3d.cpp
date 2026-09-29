@@ -1,18 +1,18 @@
-#include "my3d.h"
+#include "3d.h"
 
 #include <QDebug>
 #include <QOpenGLContext>
 
-// ---------- 构造 / 析构 ----------
+// ---------- Construction / destruction ----------
 MyGLWidget::MyGLWidget(QWidget *parent) : QOpenGLWidget(parent)
 {
-    // QOpenGLWidget 默认不参与键盘焦点，必须显式声明，否则收不到 keyPressEvent
+    // QOpenGLWidget takes no keyboard focus by default; it must be set explicitly or keyPressEvent never arrives
     setFocusPolicy(Qt::StrongFocus);
-    setMouseTracking(false);  // 只在按住左键拖拽时处理鼠标移动
+    setMouseTracking(false);  // only handle mouse moves while the left button is held and dragging
 
-    // 主循环驱动：
-    //   ticked      —— 固定步长（默认 1/60 秒）的逻辑更新：模型自转、角色推进、键盘推摄像机
-    //   frameStepped—— 每帧一次：只请求重绘（渲染与逻辑解耦）
+    // Main loop driving:
+    //   ticked       -- fixed step (1/60 s by default) logic update: model spin, character advance, keyboard camera movement
+    //   frameStepped -- once per frame: request a repaint only (rendering decoupled from logic)
     connect(&m_game_loop, &GameLoop::ticked, this, [this](std::uint64_t) { onGameTick(); });
     connect(&m_game_loop, &GameLoop::frameStepped, this, [this](float) { onGameFrame(); });
 
@@ -23,44 +23,44 @@ MyGLWidget::MyGLWidget(QWidget *parent) : QOpenGLWidget(parent)
                       << "s, frame interval =" << m_game_loop.frameInterval() << "ms";
     qInfo().noquote() << "initial camera view:"
                       << (m_camera_view == CameraView::FPV ? "FPV" : "TPV")
-                      << "(按 F5 切换人称)";
+                      << "(press F5 to switch view mode)";
 }
 
 MyGLWidget::~MyGLWidget()
 {
-    // 删除 GL 对象必须在上下文有效时进行，所以要 makeCurrent()
+    // GL objects must be destroyed while the context is valid, hence makeCurrent()
     makeCurrent();
     releaseGlResources();
     doneCurrent();
 }
 
-// ---------- 摄像机 ----------
-void MyGLWidget::setCamera(const QVector3D &eye, const QVector3D &target, const QVector3D &up)
+// ---------- Camera ----------
+void MyGLWidget::setCamera(const vec3 &eye, const vec3 &target, const vec3 &up)
 {
     MyCamera &camera = m_character.camera();
     camera.setPosition(eye);
-    camera.lookAt(target, up);  // 朝向换算成四元数，不保存 target/up
+    camera.lookAt(target, up);  // the orientation is converted to a quaternion; target/up are not stored
     logCameraPositionIfMoved();
     update();
 }
 
 void MyGLWidget::resetCamera()
 {
-    m_character.setPosition(QVector3D(0.0f, 0.0f, 0.0f));
-    m_character.setCameraOffset(QVector3D(0.0f, 2.0f, 5.0f));  // TPV 轨道偏移复位
+    m_character.setPosition(vec3{0.0f, 0.0f, 0.0f});
+    m_character.setCameraOffset(vec3{0.0f, 2.0f, 5.0f});  // reset the TPV orbit offset
 
     MyCamera &camera = m_character.camera();
-    camera.setOrientation(QQuaternion());  // 单位四元数 = 看向 -Z、头顶 +Y
+    camera.setOrientation(quat{});  // identity quaternion = looking down -Z, up is +Y
     camera.setPerspective(90.0f, 0.1f, 100.0f);
-    m_character.syncCamera();  // 按当前人称重新摆放
+    m_character.syncCamera();  // reposition for the current view mode
     syncCharacterModel();
 
-    m_last_logged_camera_position = QVector3D();  // 让下一帧必定记录一次
+    m_has_logged_camera = false;  // make the next frame log for sure
     logCameraPositionIfMoved();
     update();
 }
 
-// ---------- 人称切换器（FPV / TPV）----------
+// ---------- View-mode switch (FPV / TPV) ----------
 void MyGLWidget::setCameraView(CameraView view)
 {
     if (m_camera_view == view) {
@@ -68,8 +68,8 @@ void MyGLWidget::setCameraView(CameraView view)
     }
 
     m_camera_view = view;
-    m_character.setView(view);  // 角色按新模式重新摆放摄像机
-    clearCameraInput();         // 避免切换瞬间"按键卡住"
+    m_character.setView(view);  // the character repositions the camera for the new mode
+    clearCameraInput();         // avoids "stuck keys" at the moment of switching
 
     qInfo().noquote() << "camera view:" << (m_camera_view == CameraView::FPV ? "FPV" : "TPV");
     logCameraPositionIfMoved();
@@ -81,27 +81,27 @@ void MyGLWidget::clearCameraInput()
     m_input = CameraInput{};
 }
 
-// ---------- 主循环：固定步长的逻辑更新 ----------
+// ---------- Main loop: fixed-step logic update ----------
 void MyGLWidget::onGameTick()
 {
     const float dt = static_cast<float>(m_game_loop.fixedTickSeconds());
 
-    // 每个模型按自己的自转速度推进（固定步长 → 与帧率无关）
+    // each model advances at its own spin rate (fixed step -> independent of frame rate)
     for (MyModel &model : m_models) {
         model.updateSpin(dt);
     }
 
-    // 两种人称都由角色驱动摄像机：FPV 摆在眼睛处，TPV 按轨道偏移摆
+    // both view modes drive the camera through the character: FPV places it at the eyes, TPV at the orbit offset
     updateCharacter(dt);
 }
 
-// ---------- 主循环：每帧只请求重绘 ----------
+// ---------- Main loop: per frame, only request a repaint ----------
 void MyGLWidget::onGameFrame()
 {
     update();
 }
 
-// ---------- 输入 → 角色 → 摄像机（FPV 与 TPV 共用这段逻辑）----------
+// ---------- Input -> character -> camera (FPV and TPV share this logic) ----------
 void MyGLWidget::updateCharacter(float dt)
 {
     if (dt <= 0.0f) {
@@ -109,12 +109,12 @@ void MyGLWidget::updateCharacter(float dt)
     }
 
     m_character.controller().setInput(characterInputFromKeys());
-    m_character.update(dt);  // 推进角色位置，并按当前人称重新摆放摄像机
+    m_character.update(dt);  // advance the character position and reposition the camera for the current view mode
     syncCharacterModel();
     logCameraPositionIfMoved();
 }
 
-// 键盘状态 → 角色控制器输入
+// keyboard state -> character controller input
 MyCharacterController::InputState MyGLWidget::characterInputFromKeys() const
 {
     MyCharacterController::InputState input;
@@ -123,47 +123,48 @@ MyCharacterController::InputState MyGLWidget::characterInputFromKeys() const
     input.left = m_input.left;
     input.right = m_input.right;
     input.sprint = m_input.fast;
-    input.jump = m_input.up;  // 暂无物理，先接上意图，等加跳跃再实现
+    input.jump = m_input.up;  // no physics yet; wire up the intent now, implement it once jumping is added
     return input;
 }
 
-// 角色占位模型：跟着角色走（立方体中心抬到腰部高度）
+// character placeholder model: follows the character (the cube center is raised to waist height)
 void MyGLWidget::syncCharacterModel()
 {
     if (!m_character_model.hasMesh()) {
         return;
     }
-    m_character_model.setPosition(m_character.position() + QVector3D(0.0f, 0.9f, 0.0f));
+    m_character_model.setPosition(m_character.position() + vec3{0.0f, 0.9f, 0.0f});
 }
 
-// 机位日志：位置移动或朝向变化超过阈值才写一行（FPV 只转头不动位置，也能记录到）
+// Camera pose log: a line is written only when the position or orientation changes past a threshold (an FPV head turn still counts)
 void MyGLWidget::logCameraPositionIfMoved()
 {
     const MyCamera &camera = m_character.camera();
-    const QVector3D position = camera.position();
-    const QVector3D forward_dir = camera.forward();
+    const vec3 position = camera.position();
+    const vec3 forward_dir = camera.forward();
 
-    const bool position_changed = m_last_logged_camera_position.isNull()
+    const bool position_changed = !m_has_logged_camera
                                   || (position - m_last_logged_camera_position).length() >= m_log_move_threshold;
-    const bool forward_changed = m_last_logged_camera_forward.isNull()
-                                 || QVector3D::dotProduct(forward_dir, m_last_logged_camera_forward) < 0.999f;
+    const bool forward_changed = !m_has_logged_camera
+                                 || forward_dir.dot(m_last_logged_camera_forward) < 0.999f;
     if (!position_changed && !forward_changed) {
         return;
     }
 
+    m_has_logged_camera = true;
     m_last_logged_camera_position = position;
     m_last_logged_camera_forward = forward_dir;
     qInfo().noquote() << QStringLiteral("camera[%1]: eye(%2, %3, %4) forward(%5, %6, %7)")
                              .arg(m_camera_view == CameraView::FPV ? QStringLiteral("FPV") : QStringLiteral("TPV"))
-                             .arg(position.x(), 0, 'f', 2)
-                             .arg(position.y(), 0, 'f', 2)
-                             .arg(position.z(), 0, 'f', 2)
-                             .arg(forward_dir.x(), 0, 'f', 3)
-                             .arg(forward_dir.y(), 0, 'f', 3)
-                             .arg(forward_dir.z(), 0, 'f', 3);
+                             .arg(position.x, 0, 'f', 2)
+                             .arg(position.y, 0, 'f', 2)
+                             .arg(position.z, 0, 'f', 2)
+                             .arg(forward_dir.x, 0, 'f', 3)
+                             .arg(forward_dir.y, 0, 'f', 3)
+                             .arg(forward_dir.z, 0, 'f', 3);
 }
 
-// ---------- 键盘：驱动摄像机 ----------
+// ---------- Keyboard: drive the camera ----------
 void MyGLWidget::keyPressEvent(QKeyEvent *event)
 {
     switch (event->key()) {
@@ -174,14 +175,14 @@ void MyGLWidget::keyPressEvent(QKeyEvent *event)
         case Qt::Key_Space: case Qt::Key_E: m_input.up = true;       break;
         case Qt::Key_C: case Qt::Key_Q:     m_input.down = true;     break;
         case Qt::Key_Shift:                 m_input.fast = true;     break;
-        // 人称切换器。注意不用 Tab —— Qt 会在 QWidget::event() 里把 Tab 吃掉用于焦点切换，收不到 keyPressEvent
+        // View-mode switch. Tab is not used: Qt swallows it in QWidget::event() for focus handling, so keyPressEvent never arrives
         case Qt::Key_F5:                    setCameraView(m_camera_view == CameraView::FPV
                                                               ? CameraView::TPV
                                                               : CameraView::FPV); break;
         case Qt::Key_R:                     resetCamera();           break;
         case Qt::Key_Escape:                window()->close();       break;
         default:
-            QOpenGLWidget::keyPressEvent(event);  // 未处理的交还基类
+            QOpenGLWidget::keyPressEvent(event);  // hand unhandled events back to the base class
             return;
     }
     event->accept();
@@ -204,10 +205,10 @@ void MyGLWidget::keyReleaseEvent(QKeyEvent *event)
     event->accept();
 }
 
-// ---------- 滚轮：TPV 拉近拉远跟随距离 / FPV 缩放视场角 ----------
+// ---------- Wheel: TPV dollies the follow distance in/out / FPV zooms the field of view ----------
 void MyGLWidget::wheelEvent(QWheelEvent *event)
 {
-    const float steps = static_cast<float>(event->angleDelta().y()) / 120.0f;  // 一格 = 120
+    const float steps = static_cast<float>(event->angleDelta().y()) / 120.0f;  // one notch = 120
     if (steps == 0.0f) {
         event->accept();
         return;
@@ -217,7 +218,7 @@ void MyGLWidget::wheelEvent(QWheelEvent *event)
     if (m_camera_view == CameraView::TPV) {
         m_character.setCameraDistance(m_character.cameraDistance() - steps * m_wheel_step);
     } else {
-        // FPV：滚轮当变焦用（20°~110°）
+        // FPV: the wheel is used as zoom (20° to 110°)
         camera.setPerspective(camera.fovYDegrees() - steps * 2.0f,
                               camera.nearPlane(), camera.farPlane());
     }
@@ -227,7 +228,7 @@ void MyGLWidget::wheelEvent(QWheelEvent *event)
     event->accept();
 }
 
-// ---------- 鼠标左键拖拽：FPV 自由视角 / TPV 绕角色环绕 ----------
+// ---------- Left-button drag: FPV free look / TPV orbit around the character ----------
 void MyGLWidget::mousePressEvent(QMouseEvent *event)
 {
     if (event->button() == Qt::LeftButton) {
@@ -255,11 +256,11 @@ void MyGLWidget::mouseMoveEvent(QMouseEvent *event)
     const float dy = static_cast<float>(delta.y()) * m_orbit_speed;
 
     if (m_camera_view == CameraView::FPV) {
-        // 第一人称：向右拖 → 视线右转（yaw 负方向）；向下拖 → 低头（pitch 负方向）
-        // 俯仰限位由 MyCamera::yawPitch 内部完成（不保存欧拉角）
+        // First person: drag right -> the view turns right (negative yaw); drag down -> look down (negative pitch)
+        // Pitch clamping is handled inside MyCamera::yawPitch (no Euler angles are stored)
         m_character.camera().yawPitch(-dx, -dy);
     } else {
-        // 第三人称：向右拖 → 相机绕到左侧；向下拖 → 相机升高（"抓住角色拖"的手感）
+        // Third person: drag right -> the camera swings to the left; drag down -> the camera rises ("grab and drag the character" feel)
         m_character.orbitCamera(-dx, dy);
     }
 
@@ -279,25 +280,25 @@ void MyGLWidget::mouseReleaseEvent(QMouseEvent *event)
     QOpenGLWidget::mouseReleaseEvent(event);
 }
 
-// ---------- 着色器：源码在 shaders/basic.vert / basic.frag，经 qtds.qrc 嵌进 exe ----------
-// 编译、链接、错误日志、uniform 位置缓存都由 MyShaderProgram 负责（见 myShader.h/.cpp）
+// ---------- Shaders: sources in shaders/basic.vert / basic.frag, embedded into the exe via stv3d-lab.qrc ----------
+// Compilation, linking, error logging and uniform location caching are all handled by MyShaderProgram (see myShader.h/.cpp)
 void MyGLWidget::createShaderProgram()
 {
     const bool ok = m_program.createFromFiles(
         QStringLiteral(":/shaders/basic.vert"),
         QStringLiteral(":/shaders/basic.frag"),
-        // 显式属性号绑定（属性号常量定义在 MyMesh 里，保证 shader 与网格用同一套编号）
+        // explicit attribute index binding (index constants live in MyMesh, so shader and mesh share one numbering)
         {{MyMesh::kAttribPos, "aPos"}, {MyMesh::kAttribColor, "aColor"}});
 
     if (!ok) {
-        qCritical("着色器程序创建失败，模型将无法绘制");
+        qCritical("shader program creation failed; models cannot be drawn");
     }
 }
 
-// ---------- 造场景：一份网格 + 多个独立模型 ----------
+// ---------- Build the scene: one mesh + several independent models ----------
 void MyGLWidget::createScene()
 {
-    // ① 几何：立方体只上传一次，放进网格库
+    // (1) Geometry: the cube is uploaded once and placed into the mesh library
     std::vector<MyVertex> vertices;
     std::vector<GLuint> indices;
     MyMeshFactory::makeCube(vertices, indices, 1.0f);
@@ -305,59 +306,59 @@ void MyGLWidget::createScene()
     auto cube_mesh = std::make_shared<MyMesh>();
     cube_mesh->create(vertices, indices);
     if (!cube_mesh->isValid()) {
-        qCritical("立方体网格创建失败");
+        qCritical("cube mesh creation failed");
         return;
     }
     m_meshes.push_back(cube_mesh);
 
-    // ② 模型：三个独立模型共享同一份几何，但位置、缩放、自转各不相同
+    // (2) Models: three independent models share the same geometry but differ in position, scale and spin
     struct ModelSpec
     {
-        QVector3D position;
+        vec3 position;
         float scale;
         float spin_degrees_per_second;
-        QVector3D spin_axis;
+        vec3 spin_axis;
     };
 
     const ModelSpec specs[] = {
-        {QVector3D(-4.0f, 0.0f, -2.0f), 1.0f, 30.0f, QVector3D(0.0f, 1.0f, 0.0f)},
-        {QVector3D(4.0f, 0.0f, -2.0f), 1.4f, 60.0f, QVector3D(1.0f, 0.0f, 0.0f)},
-        {QVector3D(0.0f, 0.0f, -7.0f), 0.7f, 90.0f, QVector3D(1.0f, 1.0f, 0.0f)},
+        {vec3{-4.0f, 0.0f, -2.0f}, 1.0f, 30.0f, vec3{0.0f, 1.0f, 0.0f}},
+        {vec3{4.0f, 0.0f, -2.0f}, 1.4f, 60.0f, vec3{1.0f, 0.0f, 0.0f}},
+        {vec3{0.0f, 0.0f, -7.0f}, 0.7f, 90.0f, vec3{1.0f, 1.0f, 0.0f}},
     };
 
     for (const ModelSpec &spec : specs) {
-        MyModel model(cube_mesh);  // ★ 共享同一份网格
+        MyModel model(cube_mesh);  // * shares the same mesh
         model.setPosition(spec.position);
         model.setUniformScale(spec.scale);
         model.setSpin(spec.spin_degrees_per_second, spec.spin_axis);
         m_models.push_back(std::move(model));
     }
 
-    // ③ 角色占位模型：复用同一份立方体几何，缩小成"人形占位"，位置每帧跟随角色
+    // (3) Character placeholder model: reuses the same cube geometry, scaled down into a "humanoid placeholder"; follows the character
     m_character_model = MyModel(cube_mesh);
     m_character_model.setUniformScale(0.6f);
-    m_character_model.setSpin(0.0f);  // 角色不转
+    m_character_model.setSpin(0.0f);  // the character does not spin
     syncCharacterModel();
 
     qInfo().noquote() << "scene:" << m_meshes.size() << "mesh(es),"
                       << (m_models.size() + 1) << "model(s)";
 }
 
-// ---------- 显式释放所有 GL 资源（需要当前上下文） ----------
+// ---------- Explicitly release all GL resources (requires a current context) ----------
 void MyGLWidget::releaseGlResources()
 {
-    // 网格对象析构时会自己 glDelete*，这里清空容器即可（shared_ptr 引用计数归零）
+    // mesh objects call glDelete* in their destructor, so clearing the containers is enough (shared_ptr refcount reaches zero)
     m_models.clear();
     m_meshes.clear();
 
     m_program.destroy();
 }
 
-// ---------- 初始化 ----------
+// ---------- Initialization ----------
 void MyGLWidget::initializeGL()
 {
     if (!initializeOpenGLFunctions()) {
-        qCritical("无法加载 OpenGL 4.3 Core 函数（上下文版本过低，请检查 main.cpp 的 QSurfaceFormat）");
+        qCritical("failed to load the OpenGL 4.3 Core functions (context version too low; check the QSurfaceFormat in main.cpp)");
         return;
     }
 
@@ -369,49 +370,49 @@ void MyGLWidget::initializeGL()
 
     glClearColor(0.1f, 0.12f, 0.15f, 0.1f);
     glEnable(GL_DEPTH_TEST);
-    // glEnable(GL_MULTISAMPLE);   // 按你的改动保持关闭
+    // glEnable(GL_MULTISAMPLE);   // kept disabled for your change
 
     createShaderProgram();
     createScene();
 
-    // 初始化阶段显式检查一次 GL 错误
+    // explicitly check for a GL error once during initialization
     const GLenum err = glGetError();
     if (err != GL_NO_ERROR) {
-        qWarning() << "初始化后存在 GL 错误, code = 0x" << Qt::hex << err;
+        qWarning() << "GL error after initialization, code = 0x" << Qt::hex << err;
     }
 }
 
-// ---------- 尺寸变化 ----------
+// ---------- Resize ----------
 void MyGLWidget::resizeGL(int w, int h)
 {
     glViewport(0, 0, w, h);
-    // 只把新的纵横比告诉摄像机；fov / near / far 由摄像机自己持有
+    // only the new aspect ratio is handed to the camera; fov / near / far are held by the camera itself
     m_character.camera().setViewportAspect(h > 0 ? float(w) / float(h) : 1.0f);
 }
 
-// ---------- 绘制：遍历模型列表，一个模型一次 draw call ----------
+// ---------- Drawing: walk the model list, one draw call per model ----------
 void MyGLWidget::paintGL()
 {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     const MyCamera &camera = m_character.camera();
-    const QMatrix4x4 view_projection = camera.projectionMatrix() * camera.viewMatrix();
+    const mat4 view_projection = camera.projectionMatrix() * camera.viewMatrix();
 
-    m_program.bind();  // 所有模型共用同一份着色器程序
+    m_program.bind();  // all models share the same shader program
 
-    // 场景模型（自转的立方体）
+    // scene models (the spinning cubes)
     for (const MyModel &model : m_models) {
         MyMesh *mesh = model.mesh();
         if (mesh == nullptr || !mesh->isValid()) {
             continue;
         }
 
-        // 每个模型有自己的模型矩阵 → 每个模型重新写一次 uniform（位置由 MyShaderProgram 缓存）
+        // each model has its own model matrix -> the uniform is rewritten per model (the location is cached by MyShaderProgram)
         m_program.setMat4("uMvp", view_projection * model.modelMatrix());
         mesh->draw();
     }
 
-    // 角色占位模型
+    // character placeholder model
     if (MyMesh *mesh = m_character_model.mesh(); mesh != nullptr && mesh->isValid()) {
         m_program.setMat4("uMvp", view_projection * m_character_model.modelMatrix());
         mesh->draw();

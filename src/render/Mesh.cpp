@@ -1,22 +1,23 @@
-#include "myMesh.h"
+#include "Mesh.h"
 
 #include <QDebug>
 #include <QOpenGLContext>
 
 #include <utility>
 
-// ---------------- 构造 / 析构 / 移动 ----------------
+// ---------------- construction / destruction / move ----------------
 
 MyMesh::~MyMesh()
 {
-    // 注意：这里要求调用方保证"当前有 GL 上下文"（MyGLWidget 在 makeCurrent() 之后析构）
+    // Note: the caller must guarantee a "current GL context" here
+    // (MyGLWidget is destroyed after makeCurrent())
     destroy();
 }
 
 MyMesh::MyMesh(MyMesh &&other) noexcept
     : m_vao(other.m_vao), m_vbo(other.m_vbo), m_ebo(other.m_ebo), m_index_count(other.m_index_count)
 {
-    // 句柄所有权转移：源对象置空，避免它析构时把资源删掉
+    // Handle ownership transfer: null out the source so it does not delete the resources when destroyed
     other.m_vao = 0;
     other.m_vbo = 0;
     other.m_ebo = 0;
@@ -26,7 +27,7 @@ MyMesh::MyMesh(MyMesh &&other) noexcept
 MyMesh &MyMesh::operator=(MyMesh &&other) noexcept
 {
     if (this != &other) {
-        destroy();  // 先释放自己手里的资源
+        destroy();  // release our own resources first
 
         m_vao = other.m_vao;
         m_vbo = other.m_vbo;
@@ -41,29 +42,29 @@ MyMesh &MyMesh::operator=(MyMesh &&other) noexcept
     return *this;
 }
 
-// ---------------- 创建 / 释放 ----------------
+// ---------------- create / destroy ----------------
 
 void MyMesh::create(const std::vector<MyVertex> &vertices, const std::vector<GLuint> &indices)
 {
     if (vertices.empty() || indices.empty()) {
-        return;  // 空网格：不创建任何 GL 对象
+        return;  // empty mesh: create no GL objects at all
     }
 
-    // 先显式确认"当前有 GL 上下文"：没有上下文时直接调 initializeOpenGLFunctions()
-    // 会踩到 Qt 内部的空指针，所以必须自己拦住
+    // Check explicitly for a "current GL context" first: without a context, calling
+    // initializeOpenGLFunctions() directly hits a null pointer inside Qt, so we must block it here
     if (QOpenGLContext::currentContext() == nullptr) {
-        qCritical("没有当前 OpenGL 上下文，无法创建网格（请在 initializeGL() 里创建）");
+        qCritical("No current OpenGL context; cannot create the mesh (create it inside initializeGL())");
         return;
     }
 
-    // 本类有自己的 GL 函数表（QOpenGLFunctions 是按上下文初始化的）
+    // This class has its own GL function table (QOpenGLFunctions is initialized per context)
     if (!initializeOpenGLFunctions()) {
         return;
     }
 
-    destroy();  // 重复 create 时先清掉旧的
+    destroy();  // wipe the old objects first when create() is called again
 
-    // core profile 下所有缓冲绑定都需要先绑定 VAO
+    // Under the core profile every buffer binding requires a bound VAO first
     glGenVertexArrays(1, &m_vao);
     glBindVertexArray(m_vao);
 
@@ -81,20 +82,20 @@ void MyMesh::create(const std::vector<MyVertex> &vertices, const std::vector<GLu
                  indices.data(),
                  GL_STATIC_DRAW);
 
-    // ① 属性格式：属性号、分量数、类型、是否归一化、字节偏移（offsetof 显式给出）
+    // (1) Attribute format: attribute number, component count, type, normalized flag, byte offset (offsetof spells it out)
     glVertexAttribFormat(kAttribPos, 3, GL_FLOAT, GL_FALSE,
                          static_cast<GLuint>(offsetof(MyVertex, position)));
     glVertexAttribFormat(kAttribColor, 3, GL_FLOAT, GL_FALSE,
                          static_cast<GLuint>(offsetof(MyVertex, color)));
 
-    // ② 属性 → 绑定索引
+    // (2) Attribute -> binding index
     glVertexAttribBinding(kAttribPos, kBindingInterleaved);
     glVertexAttribBinding(kAttribColor, kBindingInterleaved);
 
     glEnableVertexAttribArray(kAttribPos);
     glEnableVertexAttribArray(kAttribColor);
 
-    // ③ 绑定索引 → 具体缓冲 + 起始偏移 + 跨距
+    // (3) Binding index -> concrete buffer + start offset + stride
     glBindVertexBuffer(kBindingInterleaved, m_vbo, 0, vertexStride());
 
     m_index_count = static_cast<GLsizei>(indices.size());
@@ -106,7 +107,8 @@ void MyMesh::create(const std::vector<MyVertex> &vertices, const std::vector<GLu
 
 void MyMesh::destroy()
 {
-    // 句柄为 0 时直接跳过：既可重复调用，也允许在上下文已销毁后安全空转
+    // Skip straight away when the handle is 0: this keeps the call repeatable and safe
+    // to no-op after the context has already been destroyed
     if (m_ebo != 0) {
         glDeleteBuffers(1, &m_ebo);
         m_ebo = 0;
@@ -122,7 +124,7 @@ void MyMesh::destroy()
     m_index_count = 0;
 }
 
-// ---------------- 绘制 ----------------
+// ---------------- drawing ----------------
 
 void MyMesh::draw()
 {
@@ -130,7 +132,7 @@ void MyMesh::draw()
         return;
     }
 
-    // 显式绑定绘制所需的全部状态，不依赖 VAO 里记录的那一份
+    // Bind explicitly all state needed for drawing, without relying on the copy recorded in the VAO
     glBindVertexArray(m_vao);
     glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_ebo);
@@ -141,17 +143,17 @@ void MyMesh::draw()
     glBindVertexArray(0);
 }
 
-// ---------------- 几何工厂 ----------------
+// ---------------- geometry factories ----------------
 
 namespace MyMeshFactory
 {
 
 void makeCube(std::vector<MyVertex> &vertices, std::vector<GLuint> &indices, float size)
 {
-    const float h = size * 0.5f;  // 半边长
+    const float h = size * 0.5f;  // half edge length
 
     vertices = {
-        // 位置                  // 颜色
+        // position              // color
         {{-h, -h, -h}, {0.2f, 0.3f, 0.8f}},
         {{ h, -h, -h}, {0.2f, 0.8f, 0.3f}},
         {{ h,  h, -h}, {0.8f, 0.8f, 0.2f}},
@@ -163,12 +165,12 @@ void makeCube(std::vector<MyVertex> &vertices, std::vector<GLuint> &indices, flo
     };
 
     indices = {
-        0, 1, 2, 2, 3, 0,  // 后
-        4, 5, 6, 6, 7, 4,  // 前
-        0, 4, 7, 7, 3, 0,  // 左
-        1, 5, 6, 6, 2, 1,  // 右
-        3, 2, 6, 6, 7, 3,  // 上
-        0, 1, 5, 5, 4, 0,  // 下
+        0, 1, 2, 2, 3, 0,  // back
+        4, 5, 6, 6, 7, 4,  // front
+        0, 4, 7, 7, 3, 0,  // left
+        1, 5, 6, 6, 2, 1,  // right
+        3, 2, 6, 6, 7, 3,  // top
+        0, 1, 5, 5, 4, 0,  // bottom
     };
 }
 

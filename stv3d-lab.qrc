@@ -1,6 +1,7 @@
 <!DOCTYPE RCC>
 <RCC version="1.0">
-    <!-- 着色器以真实文件存在（编辑器有 GLSL 语法高亮），编译期嵌入可执行文件 -->
+    <!-- Shaders stay real files on disk (so the editor gives them GLSL highlighting) and are
+         embedded into the executable at build time. -->
     <qresource prefix="/">
         <file>shaders/basic.vert</file>
         <file>shaders/basic.frag</file>
