@@ -1,7 +1,7 @@
 #ifndef RENDER_MESH_H
 #define RENDER_MESH_H
 
-#include <QOpenGLFunctions_4_3_Core>
+#include "render/gl/GLFunctions.h"
 
 #include <cstddef>
 #include <vector>
@@ -18,19 +18,20 @@ struct Vertex
 // A mesh = one VAO/VBO/EBO set plus the index count, i.e. "the geometry itself".
 //
 // Lifetime rules:
-//   * Every GL call requires a current valid context: call create() in initializeGL(),
-//     and destroy() after makeCurrent() (GLWidget's destructor already follows this pattern).
+//   * The GL function table is passed in at create() time. There is no global GL state to reach for
+//     and no Qt object owning the pointers, so the dependency is visible in the signature.
+//   * Every GL call needs a current context: create() after GLContext::makeCurrent(), and destroy()
+//     while it is still current (the destructor calls destroy()).
 //   * Copying is disabled (two objects would hold the same GLuint values -> a double glDelete);
 //     moving is allowed (so a mesh can live in a std::vector).
-//   * The destructor calls destroy(), so a current context is required when destroying too.
-class Mesh : protected QOpenGLFunctions_4_3_Core
+class Mesh
 {
 public:
     // Explicit attribute numbers and binding index (one-to-one with the shader's
-    // layout(location = N) in 3d.cpp)
+    // layout(location = N) in shaders/basic.vert)
     static constexpr GLuint kAttribPos = 0;
     static constexpr GLuint kAttribColor = 1;
-    static constexpr GLuint kBindingInterleaved = 0;  // position+color interleaved in one VBO, sharing a single binding index
+    static constexpr GLuint kBindingInterleaved = 0;  // position+color interleaved in one VBO
 
     Mesh() = default;
     ~Mesh();
@@ -41,7 +42,7 @@ public:
     Mesh &operator=(Mesh &&other) noexcept;
 
     // Upload the geometry and set up the explicit "attribute number <-> binding index <-> buffer" wiring
-    void create(const std::vector<Vertex> &vertices, const std::vector<GLuint> &indices);
+    void create(GLFunctions &gfx, const std::vector<Vertex> &vertices, const std::vector<GLuint> &indices);
 
     // Release the GL objects (safe to call repeatedly; requires a current context)
     void destroy();
@@ -51,10 +52,11 @@ public:
     static constexpr GLsizei vertexStride() { return static_cast<GLsizei>(sizeof(Vertex)); }
 
     // Draw: explicitly replay all binding state (without relying on what the VAO "remembers")
-    // The caller is responsible for glUseProgram and for setting the uniforms
+    // The caller is responsible for binding the program and for setting the uniforms
     void draw();
 
 private:
+    GLFunctions *gfx = nullptr;  // not owned: the table belongs to the render backend
     GLuint vao = 0;
     GLuint vbo = 0;
     GLuint ebo = 0;

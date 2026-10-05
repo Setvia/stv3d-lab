@@ -9,14 +9,13 @@
         {
             "name": "mingw",
             "displayName": "MinGW + vcpkg (x64-mingw-dynamic)",
-            "description": "g++ 13 + vcpkg cpr, output goes to build/",
+            "description": "g++ 13 + vcpkg cpr, Win32 window + OpenGL 4.3, output goes to build/",
             "generator": "MinGW Makefiles",
             "binaryDir": "${sourceDir}/build",
             "cacheVariables": {
                 "CMAKE_CXX_COMPILER": "D:/MinGW/bin/g++.exe",
                 "CMAKE_TOOLCHAIN_FILE": "D:/git/repos/vcpkg/scripts/buildsystems/vcpkg.cmake",
                 "VCPKG_TARGET_TRIPLET": "x64-mingw-dynamic",
-                "CMAKE_PREFIX_PATH": "D:/Qt/6.9.3/mingw_64",
                 "CMAKE_BUILD_TYPE": "Debug"
             }
         }

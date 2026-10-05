@@ -7,6 +7,7 @@
 #include "game/Camera.h"
 #include "game/Character.h"
 #include "game/GameLoop.h"
+#include "game/InputMapping.h"
 #include "game/Model.h"
 
 #include "core/math/mat4.h"
@@ -458,6 +459,75 @@ int main()
         const int frames_before_exit_step = frames;
         loop.advanceBy(tick);
         check(frames == frames_before_exit_step, "loop: an exited loop runs nothing");
+    }
+
+    // ============================ input mapping ============================
+    // The platform layer collects raw input; this mapping is what turns it into intents, so it can
+    // be tested without a window.
+    {
+        FrameInput input;
+
+        check(!InputMapping::viewToggleRequested(input) && !InputMapping::quitRequested(input),
+              "input: an empty frame requests nothing");
+        const CharacterController::InputState idle = InputMapping::characterInputFromKeys(input);
+        check(!idle.forward && !idle.backward && !idle.left && !idle.right && !idle.jump && !idle.sprint,
+              "input: an empty frame produces no movement intent");
+
+        input.key_down[keyIndex(Key::W)] = true;
+        input.key_down[keyIndex(Key::Up)] = true;
+        const CharacterController::InputState walking = InputMapping::characterInputFromKeys(input);
+        check(walking.forward, "input: W and the up arrow both mean forward");
+        check(!walking.backward && !walking.left && !walking.right,
+              "input: forward alone does not produce the other directions");
+
+        input.key_down[keyIndex(Key::W)] = false;
+        input.key_down[keyIndex(Key::Up)] = false;
+        input.key_down[keyIndex(Key::S)] = true;
+        input.key_down[keyIndex(Key::Down)] = true;
+        input.key_down[keyIndex(Key::A)] = true;
+        input.key_down[keyIndex(Key::Left)] = true;
+        input.key_down[keyIndex(Key::D)] = true;
+        input.key_down[keyIndex(Key::Right)] = true;
+        input.key_down[keyIndex(Key::Space)] = true;
+        input.key_down[keyIndex(Key::E)] = true;
+        input.key_down[keyIndex(Key::Shift)] = true;
+        const CharacterController::InputState every_key = InputMapping::characterInputFromKeys(input);
+        check(every_key.backward && every_key.left && every_key.right,
+              "input: S/A/D and the arrow keys map to their directions");
+        check(every_key.jump, "input: Space (or E) is the jump intent");
+        check(every_key.sprint, "input: Shift is the sprint intent");
+        check(!every_key.forward, "input: a released key is not reported as held");
+
+        // Toggles are edges, not levels: holding the key must not fire every frame
+        input.key_pressed[keyIndex(Key::F5)] = true;
+        check(InputMapping::viewToggleRequested(input), "input: F5 requests the view toggle");
+        input.key_down[keyIndex(Key::F5)] = true;
+        input.key_pressed[keyIndex(Key::F5)] = false;
+        check(!InputMapping::viewToggleRequested(input), "input: holding F5 does not toggle again");
+
+        input.key_pressed[keyIndex(Key::R)] = true;
+        check(InputMapping::resetRequested(input), "input: R requests a reset");
+
+        input.key_pressed[keyIndex(Key::Escape)] = true;
+        check(InputMapping::quitRequested(input), "input: Escape requests a quit");
+        input.key_pressed[keyIndex(Key::Escape)] = false;
+        check(!InputMapping::quitRequested(input), "input: the quit request is not sticky");
+        input.close_requested = true;
+        check(InputMapping::quitRequested(input), "input: the window close button also requests a quit");
+
+        // endFrame() drops the per-frame parts but keeps the situation (held keys, cursor position)
+        input.mouse_x = 640;
+        input.mouse_delta_x = 5;
+        input.mouse_delta_y = -3;
+        input.wheel_steps = 2.0f;
+        input.resized = true;
+        input.clearPerFrame();
+        check(!InputMapping::resetRequested(input) && !input.close_requested && !input.resized,
+              "input: clearPerFrame drops the edges, the close request and the resize flag");
+        check(input.mouse_delta_x == 0 && input.mouse_delta_y == 0 && input.wheel_steps == 0.0f,
+              "input: clearPerFrame drops the mouse delta and the wheel");
+        check(input.isDown(Key::Shift) && input.mouse_x == 640,
+              "input: clearPerFrame keeps the held keys and the cursor position");
     }
 
     std::printf("\n%s (%d failure(s))\n", g_failures == 0 ? "all checks passed" : "FAILURES", g_failures);

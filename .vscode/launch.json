@@ -2,7 +2,7 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "C/C++: Debug stv3d-lab (CMake + Qt6 + MinGW)",
+            "name": "C/C++: Debug stv3d-lab (MinGW, Win32 + OpenGL)",
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}\\build\\stv3d-lab.exe",
@@ -12,7 +12,7 @@
             "environment": [
                 {
                     "name": "PATH",
-                    "value": "D:/Qt/6.9.3/mingw_64/bin;D:/git/repos/vcpkg/installed/x64-mingw-dynamic/bin;${env:PATH}"
+                    "value": "D:/git/repos/vcpkg/installed/x64-mingw-dynamic/bin;${env:PATH}"
                 }
             ],
             "externalConsole": false,
