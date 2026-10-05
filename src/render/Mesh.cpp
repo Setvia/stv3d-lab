@@ -1,7 +1,8 @@
 #include "Mesh.h"
 
-#include <QDebug>
 #include <QOpenGLContext>
+
+#include "core/log/LogManager.h"
 
 #include <utility>
 
@@ -53,7 +54,7 @@ void Mesh::create(const std::vector<Vertex> &vertices, const std::vector<GLuint>
     // Check explicitly for a "current GL context" first: without a context, calling
     // initializeOpenGLFunctions() directly hits a null pointer inside Qt, so we must block it here
     if (QOpenGLContext::currentContext() == nullptr) {
-        qCritical("No current OpenGL context; cannot create the mesh (create it inside initializeGL())");
+        LOG_ERROR() << "No current OpenGL context; cannot create the mesh (create it inside initializeGL())";
         return;
     }
 

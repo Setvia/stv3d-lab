@@ -1,7 +1,8 @@
 #include "3d.h"
 
-#include <QDebug>
 #include <QOpenGLContext>
+
+#include "core/log/LogManager.h"
 
 // ---------- Construction / destruction ----------
 GLWidget::GLWidget(QWidget *parent) : QOpenGLWidget(parent)
@@ -19,11 +20,10 @@ GLWidget::GLWidget(QWidget *parent) : QOpenGLWidget(parent)
     game_loop.init();
     game_loop.start();
 
-    qInfo().noquote() << "game loop started: fixed tick =" << game_loop.getFixedTickSeconds()
-                      << "s, frame interval =" << game_loop.getFrameInterval() << "ms";
-    qInfo().noquote() << "initial camera view:"
-                      << (camera_view == CameraView::FPV ? "FPV" : "TPV")
-                      << "(press F5 to switch view mode)";
+    LOG_INFO() << "game loop started: fixed tick = " << game_loop.getFixedTickSeconds()
+               << " s, frame interval = " << game_loop.getFrameInterval() << " ms";
+    LOG_INFO() << "initial camera view: " << (camera_view == CameraView::FPV ? "FPV" : "TPV")
+               << " (press F5 to switch view mode)";
 }
 
 GLWidget::~GLWidget()
@@ -71,7 +71,7 @@ void GLWidget::setCameraView(CameraView view)
     character.setView(view);  // the character repositions the camera for the new mode
     clearCameraInput();         // avoids "stuck keys" at the moment of switching
 
-    qInfo().noquote() << "camera view:" << (camera_view == CameraView::FPV ? "FPV" : "TPV");
+    LOG_INFO() << "camera view: " << (camera_view == CameraView::FPV ? "FPV" : "TPV");
     logCameraPositionIfMoved();
     update();
 }
@@ -154,14 +154,10 @@ void GLWidget::logCameraPositionIfMoved()
     has_logged_camera = true;
     last_logged_camera_position = position;
     last_logged_camera_forward = forward_dir;
-    qInfo().noquote() << QStringLiteral("camera[%1]: eye(%2, %3, %4) forward(%5, %6, %7)")
-                             .arg(camera_view == CameraView::FPV ? QStringLiteral("FPV") : QStringLiteral("TPV"))
-                             .arg(position.x, 0, 'f', 2)
-                             .arg(position.y, 0, 'f', 2)
-                             .arg(position.z, 0, 'f', 2)
-                             .arg(forward_dir.x, 0, 'f', 3)
-                             .arg(forward_dir.y, 0, 'f', 3)
-                             .arg(forward_dir.z, 0, 'f', 3);
+    LOG_INFO() << "camera[" << (camera_view == CameraView::FPV ? "FPV" : "TPV") << "]: eye("
+               << logFixed(position.x, 2) << ", " << logFixed(position.y, 2) << ", "
+               << logFixed(position.z, 2) << ") forward(" << logFixed(forward_dir.x, 3) << ", "
+               << logFixed(forward_dir.y, 3) << ", " << logFixed(forward_dir.z, 3) << ")";
 }
 
 // ---------- Keyboard: drive the camera ----------
@@ -291,7 +287,7 @@ void GLWidget::createShaderProgram()
         {{Mesh::kAttribPos, "aPos"}, {Mesh::kAttribColor, "aColor"}});
 
     if (!ok) {
-        qCritical("shader program creation failed; models cannot be drawn");
+        LOG_ERROR() << "shader program creation failed; models cannot be drawn";
     }
 }
 
@@ -306,7 +302,7 @@ void GLWidget::createScene()
     auto cube_mesh = std::make_shared<Mesh>();
     cube_mesh->create(vertices, indices);
     if (!cube_mesh->isValid()) {
-        qCritical("cube mesh creation failed");
+        LOG_ERROR() << "cube mesh creation failed";
         return;
     }
     meshes.push_back(cube_mesh);
@@ -340,8 +336,7 @@ void GLWidget::createScene()
     character_model.setSpin(0.0f);  // the character does not spin
     syncCharacterModel();
 
-    qInfo().noquote() << "scene:" << meshes.size() << "mesh(es),"
-                      << (models.size() + 1) << "model(s)";
+    LOG_INFO() << "scene: " << meshes.size() << " mesh(es), " << (models.size() + 1) << " model(s)";
 }
 
 // ---------- Explicitly release all GL resources (requires a current context) ----------
@@ -358,15 +353,15 @@ void GLWidget::releaseGlResources()
 void GLWidget::initializeGL()
 {
     if (!initializeOpenGLFunctions()) {
-        qCritical("failed to load the OpenGL 4.3 Core functions (context version too low; check the QSurfaceFormat in main.cpp)");
+        LOG_ERROR() << "failed to load the OpenGL 4.3 Core functions (context version too low; check the QSurfaceFormat in main.cpp)";
         return;
     }
 
     const QSurfaceFormat fmt = context()->format();
-    qInfo().noquote() << "GL context:" << fmt.majorVersion() << "." << fmt.minorVersion()
-                      << "| core profile:" << (fmt.profile() == QSurfaceFormat::CoreProfile)
-                      << "| GL_VERSION:" << reinterpret_cast<const char *>(glGetString(GL_VERSION))
-                      << "| GPU:" << reinterpret_cast<const char *>(glGetString(GL_RENDERER));
+    LOG_INFO() << "GL context: " << fmt.majorVersion() << "." << fmt.minorVersion()
+               << " | core profile: " << (fmt.profile() == QSurfaceFormat::CoreProfile)
+               << " | GL_VERSION: " << reinterpret_cast<const char *>(glGetString(GL_VERSION))
+               << " | GPU: " << reinterpret_cast<const char *>(glGetString(GL_RENDERER));
 
     glClearColor(0.1f, 0.12f, 0.15f, 0.1f);
     glEnable(GL_DEPTH_TEST);
@@ -378,7 +373,7 @@ void GLWidget::initializeGL()
     // explicitly check for a GL error once during initialization
     const GLenum err = glGetError();
     if (err != GL_NO_ERROR) {
-        qWarning() << "GL error after initialization, code = 0x" << Qt::hex << err;
+        LOG_WARNING() << "GL error after initialization, code = " << logHex(err, 4);
     }
 }
 

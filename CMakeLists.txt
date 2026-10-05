@@ -25,6 +25,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # ---- stv3d_core: zero third-party dependencies -----------------------------
 add_library(stv3d_core STATIC
     src/core/core_smoke.cpp
+    src/core/log/LogManager.cpp
+    src/core/log/LogManager.h
     src/core/math/conventions.h
     src/core/math/vec2.h
     src/core/math/vec3.h
@@ -36,8 +38,13 @@ add_library(stv3d_core STATIC
     src/core/geometry/Triangle.h
     src/core/geometry/MeshData.h
 )
+# Logging uses a small atomic spin lock rather than std::mutex, so no pthread symbol is referenced.
+# Reason: the posix thread model makes g++ pass an implicit -lpthread, which on MinGW resolves to the
+# STATIC libpthread.a, and vcpkg's libcpr.dll.a re-exports the same winpthread symbols - linking both
+# fails with "multiple definition of pthread_mutex_lock". That is why there is no find_package(Threads)
+# and no -lpthread anywhere here (adding either one brings the conflict straight back).
 target_include_directories(stv3d_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
-# NOTE: deliberately NO find_package() and NO target_link_libraries() here.
+# NOTE: deliberately NO Qt and NO OpenGL here - only the C++ standard library.
 
 # ---- third-party dependencies of the Qt/GL side ---------------------------
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets)
@@ -71,14 +78,13 @@ target_link_libraries(stv3d_engine PUBLIC stv3d_core)
 # ---- stv3d_app: the executable (Qt lives here and above) ------------------
 # Header files are listed so AUTOMOC can see the Q_OBJECT headers (3d.h, GameLoop.h).
 # stv3d-lab.qrc embeds the shaders into the executable (AUTORCC).
+# LogManager moved into stv3d_core: it is Qt-free now, so logging is a core service.
 add_executable(stv3d-lab
     src/main.cpp
     src/game/3d.cpp
     src/game/3d.h
     src/game/GameLoop.cpp
     src/game/GameLoop.h
-    src/core/log/LogManager.cpp
-    src/core/log/LogManager.h
     stv3d-lab.qrc
 )
 set_target_properties(stv3d-lab PROPERTIES
@@ -108,6 +114,11 @@ add_test(NAME core_math COMMAND stv3d_core_tests)
 add_executable(stv3d_engine_tests tests/engine_test.cpp)
 target_link_libraries(stv3d_engine_tests PRIVATE stv3d_engine)
 add_test(NAME engine_scene COMMAND stv3d_engine_tests)
+
+# The logging test also proves that core/log needs nothing but the standard library
+add_executable(stv3d_core_log_tests tests/core_log_test.cpp)
+target_link_libraries(stv3d_core_log_tests PRIVATE stv3d_core)
+add_test(NAME core_log COMMAND stv3d_core_log_tests)
 
 # ---- runtime deployment (Windows) ---------------------------------------
 # Copy the vcpkg runtime DLLs next to the executable so it can be launched directly.

@@ -1,88 +1,201 @@
 #include "LogManager.h"
 
-#include <QCoreApplication>
-#include <QDateTime>
-#include <QFile>
-#include <QMutex>
-#include <QMutexLocker>
+#include <atomic>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <ctime>
+#include <fstream>
+#include <iomanip>
+#include <mutex>   // only for std::lock_guard; std::mutex itself is deliberately not used (see SpinLock)
+#include <thread>
 
-namespace {
+namespace
+{
 
-// The file object and mutex are kept inside the .cpp: unreachable from outside, so their
-// lifetime can only be controlled through init()/shutdown()
-QFile *g_log_file = nullptr;
-QMutex g_log_mutex;
+// A tiny spin lock instead of std::mutex - on purpose, and this is the reason:
+//
+// std::mutex drags the pthread_mutex_* symbols into the link. On this machine that means the STATIC
+// libpthread.a, while vcpkg's libcpr.dll.a already re-exports the very same winpthread symbols, so
+// the link fails with "multiple definition of pthread_mutex_lock". Putting -lwinpthread first fixes
+// the link but embeds a second pthread implementation beside the libwinpthread-1.dll that Qt itself
+// uses - two runtimes in one process, which is exactly the kind of bug that surfaces much later.
+//
+// Logging only ever guards a very short critical section (assemble one line, write it, flush), so an
+// atomic flag is sufficient, needs no library at all and keeps the linker out of that fight.
+class SpinLock
+{
+public:
+    void lock()
+    {
+        while (flag.test_and_set(std::memory_order_acquire))
+        {
+            std::this_thread::yield();  // maps to SwitchToThread on MinGW, not to pthread_yield
+        }
+    }
+
+    void unlock()
+    {
+        flag.clear(std::memory_order_release);
+    }
+
+private:
+    std::atomic_flag flag = ATOMIC_FLAG_INIT;  // C++17 spelling of "clear at startup"
+};
+
+// File, path and lock live inside this .cpp: unreachable from outside, so their lifetime can only
+// be controlled through init()/shutdown(). Static storage duration spans the whole process.
+SpinLock g_log_lock;
+std::ofstream g_log_file;
+std::string g_log_path;
+bool g_ready = false;
+
+// "2026-10-05 22:11:53.506" - always called while the log lock is held, so std::localtime is safe
+std::string timestampNow()
+{
+    const auto now = std::chrono::system_clock::now();
+    const auto whole_seconds = std::chrono::time_point_cast<std::chrono::seconds>(now);
+    const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now - whole_seconds).count();
+
+    const std::time_t raw = std::chrono::system_clock::to_time_t(now);
+    std::tm local{};
+    if (localtime_s(&local, &raw) != 0)
+    {
+        return "0000-00-00 00:00:00.000";
+    }
+
+    char text[32];
+    std::snprintf(text, sizeof(text), "%04d-%02d-%02d %02d:%02d:%02d.%03d",
+                  local.tm_year + 1900, local.tm_mon + 1, local.tm_mday,
+                  local.tm_hour, local.tm_min, local.tm_sec,
+                  static_cast<int>(millis));
+    return text;
+}
 
 }  // namespace
 
-QString LogManager::logFilePath()
+const char *logLevelTag(LogLevel level)
 {
-    return QCoreApplication::applicationDirPath() + QStringLiteral("/stv3d-lab.log");
+    switch (level)
+    {
+        case LogLevel::Debug:   return "DEBUG";
+        case LogLevel::Info:    return "INFO";
+        case LogLevel::Warning: return "WARN";
+        case LogLevel::Error:   return "ERROR";
+        case LogLevel::Fatal:   return "FATAL";
+    }
+    return "INFO";
 }
 
-bool LogManager::isReady()
+bool LogManager::init(const std::string &filePath)
 {
-    return g_log_file != nullptr && g_log_file->isOpen();
-}
+    std::lock_guard<SpinLock> lock(g_log_lock);
 
-bool LogManager::init()
-{
-    // Static storage duration: the lifetime spans the whole process, avoiding a dangling pointer
-    // if the file object were on the stack while the handler was still alive
-    static QFile log_file;
+    if (g_ready)
+    {
+        return true;  // idempotent: a second init() keeps the already open file
+    }
 
-    log_file.setFileName(logFilePath());
-    if (!log_file.open(QIODevice::WriteOnly | QIODevice::Append)) {
+    g_log_file.open(filePath, std::ios::out | std::ios::app);
+    if (!g_log_file.is_open())
+    {
+        g_log_path.clear();
         return false;
     }
 
-    log_file.write(QStringLiteral("\n===== stv3d-lab start =====\n").toUtf8());
-    log_file.flush();
+    g_log_path = filePath;
+    g_ready = true;
 
-    g_log_file = &log_file;
-    qInstallMessageHandler(&LogManager::messageHandler);
+    g_log_file << "\n===== stv3d-lab start =====\n";
+    g_log_file.flush();
     return true;
 }
 
 void LogManager::shutdown()
 {
-    qInstallMessageHandler(nullptr);
+    std::lock_guard<SpinLock> lock(g_log_lock);
 
-    QMutexLocker locker(&g_log_mutex);
-    if (g_log_file != nullptr) {
-        g_log_file->flush();
-        g_log_file->close();
-        g_log_file = nullptr;
+    if (g_log_file.is_open())
+    {
+        g_log_file.flush();
+        g_log_file.close();
+    }
+    g_ready = false;
+}
+
+std::string LogManager::logFilePath()
+{
+    std::lock_guard<SpinLock> lock(g_log_lock);
+    return g_log_path;
+}
+
+bool LogManager::isReady()
+{
+    std::lock_guard<SpinLock> lock(g_log_lock);
+    return g_ready;
+}
+
+void LogManager::write(LogLevel level, const std::string &message)
+{
+    // The lock covers timestamp + line assembly + write: a line is always complete and in order
+    std::lock_guard<SpinLock> lock(g_log_lock);
+
+    const std::string line = timestampNow() + " [" + logLevelTag(level) + "] " + message + "\n";
+
+    if (g_ready && g_log_file.is_open())
+    {
+        g_log_file << line;
+        g_log_file.flush();
+    }
+    else
+    {
+        std::fputs(line.c_str(), stderr);
+    }
+
+    if (level == LogLevel::Fatal)
+    {
+        if (g_log_file.is_open())
+        {
+            g_log_file.flush();
+        }
+        std::abort();  // a fatal error terminates the process, as before
     }
 }
 
-void LogManager::messageHandler(QtMsgType type, const QMessageLogContext &, const QString &message)
+// ---------------- LogStream ----------------
+
+LogStream &LogStream::operator<<(bool value)
 {
-    const char *level = "INFO";
-    switch (type) {
-        case QtDebugMsg:    level = "DEBUG"; break;
-        case QtInfoMsg:     level = "INFO";  break;
-        case QtWarningMsg:  level = "WARN";  break;
-        case QtCriticalMsg: level = "ERROR"; break;
-        case QtFatalMsg:    level = "FATAL"; break;
-    }
+    buffer << (value ? "true" : "false");
+    return *this;
+}
 
-    // Lock: other threads may be writing to the log at the same time; the locker unlocks
-    // automatically when it goes out of scope
-    QMutexLocker locker(&g_log_mutex);
-    if (g_log_file != nullptr && g_log_file->isOpen()) {
-        const QString line = QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz"))
-                             + QStringLiteral(" [")
-                             + QLatin1String(level)
-                             + QStringLiteral("] ")
-                             + message
-                             + QLatin1Char('\n');
+LogStream &LogStream::operator<<(LogHex hex)
+{
+    // Save/restore the stream state: a helper must not change how later values are printed
+    const std::ios::fmtflags flags = buffer.flags();
+    const char fill = buffer.fill();
 
-        g_log_file->write(line.toUtf8());
-        g_log_file->flush();
+    buffer << "0x" << std::hex << std::nouppercase;
+    if (hex.width > 0)
+    {
+        buffer << std::setw(hex.width) << std::setfill('0');
     }
+    buffer << hex.value;
 
-    if (type == QtFatalMsg) {
-        abort();  // A fatal error must terminate, matching Qt's default behavior
-    }
+    buffer.flags(flags);
+    buffer.fill(fill);
+    return *this;
+}
+
+LogStream &LogStream::operator<<(LogFixed fixed)
+{
+    const std::ios::fmtflags flags = buffer.flags();
+    const std::streamsize precision = buffer.precision();
+
+    buffer << std::fixed << std::setprecision(fixed.decimals) << fixed.value;
+
+    buffer.precision(precision);
+    buffer.flags(flags);
+    return *this;
 }

@@ -40,6 +40,16 @@ cmake --build --preset mingw    # 构建 → build\stv3d-lab.exe
 - 若链接报 `cannot open output file stv3d-lab.exe: Permission denied`，是上一次的 `stv3d-lab.exe` 还在运行：
   `Get-Process stv3d-lab | Stop-Process -Force`
 
+### 这台机器上的 Windows / MinGW 陷阱（都实际踩过）
+
+| 现象 | 真正原因 / 处理 |
+|---|---|
+| vcpkg 报 `Unable to find a valid Visual Studio instance` | 机器上没有 MSVC，任何 `vcpkg install` 都要带 `--host-triplet x64-mingw-dynamic` |
+| 链接报 `multiple definition of pthread_mutex_lock` | posix 线程模型下 g++ 隐式传 `-lpthread`，在 MinGW 上解析到**静态** `libpthread.a`；vcpkg 的 `libcpr.dll.a` 又导出同一批 winpthread 符号。**不要** `find_package(Threads)`、不要加 `-lpthread`、更不要用 `std::mutex`（日志改用原子自旋锁就是为了绕开它；强行 `-lwinpthread` 能过，但会把第二份 pthread 实现塞进一个有 Qt DLL 的进程） |
+| 结构体成员名 `near` / `far` 编译报奇怪的错 | `<windows.h>`（经 Qt 带进来）把它们定义成**宏**，只能叫 `near_plane` / `far_plane` |
+| 用 PowerShell 截图验证渲染时"右半边被切掉" | 本机 DPI 缩放 125%，非 DPI-aware 的 PowerShell 会把 `GetWindowRect` 的虚拟像素当物理像素（×1.25 才对齐）；`PrintWindow` 抓不到 GL 区域（黑），要抓就抓全屏再按物理坐标裁剪 |
+| `Select-Object -First N` 之后构建/gdb 莫名其妙 exit 1 | PowerShell 提前关管道会**掐死上游进程**，别看被截断的输出，改用 `*> build\build.log` 落盘再读 |
+
 ## 3. 目录结构
 
 ```
@@ -56,7 +66,7 @@ stv3d-lab/
 │   │   ├─ core_smoke.cpp      守卫 TU：core 里一旦出现 Qt/GL include 就编译失败
 │   │   ├─ math/               vec2/vec3/vec4、mat3/mat4、quat、conventions.h
 │   │   ├─ geometry/           Vertex、Triangle、MeshData（纯 CPU 数据）、generator/
-│   │   └─ log/                LogManager（目前仍用 Qt，下一步搬到 platform/qt）
+│   │   └─ log/                LogManager：★ 已去 Qt（std::ofstream + 原子自旋锁，格式与原来一致）
 │   ├─ engine → 见下（物理位置仍在 src/game/）
 │   ├─ game/                   场景与交互
 │   │   ├─ Camera.h            Camera：位置 + 四元数朝向 + 投影（★ 已用 core 数学）
@@ -84,7 +94,7 @@ stv3d-lab/
 依赖方向严格向下，**Qt 只允许出现在最上面**：
 
 ```
-stv3d-lab (exe)   src/main.cpp、src/game/{3d,GameLoop}.*、src/core/log/*   ← Qt + OpenGL + cpr
+stv3d-lab (exe)   src/main.cpp、src/game/{3d,GameLoop}.*                            ← Qt + OpenGL + cpr
    ├─ stv3d_engine     src/game/{Camera.h, Model.h, Character.*}            ← 只链 core（无 Qt / 无 GL）
    ├─ stv3d_render_gl  src/render/*                                         ← OpenGL 后端
    └─ stv3d_core       src/core/*                                           ← 零依赖（无 Qt、无 GL）
@@ -202,12 +212,28 @@ stv3d-lab (exe)
 - **不使用 `while` 阻塞循环**：Qt 事件循环必须持续运行，阻塞会把界面冻死
 - `mainLoop()` 是私有单帧推进，由内部 `QTimer` 驱动
 
-### `LogManager`（src/core/log/LogManager.h/.cpp）
-> 位置在 `core/` 但实现用了 Qt（`QFile/QString/QDateTime/QMutex`）——它是唯一"名不副实"的文件。
-> 下一步把它拆成 `core` 的 `ILogSink` 接口 + `platform/qt` 的实现（或直接用 `std::ofstream` 实现，连 Qt 都不需要）。
+### `LogManager`（src/core/log/LogManager.h/.cpp → `stv3d_core`，**零依赖，std only**）
 
-- `init()` / `shutdown()` / `logFilePath()` / `isReady()`；日志格式 `时间戳 [级别] 内容`
-- 文件对象藏在 `.cpp` 内、`QMutex` 保护（多线程安全）；`QtFatalMsg` 触发 `abort()`
+一行日志的格式（与旧的 Qt 版本逐字一致）：
+
+```
+2026-10-05 22:43:36.797 [INFO] shader program ready: id = 3 | vertex: :/shaders/basic.vert
+```
+
+| 接口 | 说明 |
+|---|---|
+| `init(path)` / `shutdown()` / `isReady()` / `logFilePath()` | 打开（追加模式，写 start 横幅）/ 关闭；`init` 之后重复调用是幂等的 |
+| `write(level, message)` | 写一整行；`LOG_*()` 宏内部就用它（`main.cpp` 的 Qt 桥接也用它） |
+| `LOG_DEBUG/INFO/WARNING/ERROR/FATAL()` | 返回一个临时 `LogStream`，**整行拼完才落盘**（析构时写入并 flush），所以多线程下也不会把两行搅在一起 |
+| `logHex(v, width)` / `logFixed(v, decimals)` | `0x0500` / `-0.080`，替代 Qt 的 `Qt::hex` 与 `QString::arg(...,'f',n)` |
+| `LogStream::operator<<(bool)` | 打印 `true` / `false` 而不是 `1` / `0` |
+
+设计要点：
+
+- **路径由调用方给**：`init(path)` 收一个 `std::string`。解析"exe 所在目录"是平台问题（`GetModuleFileNameW`），属于 app/platform 层，core 不该碰。
+- **init 之前不静默丢消息**：还没打开文件时写 stderr，比"什么都不打印"好。
+- **锁是 `std::atomic_flag` 自旋锁，不是 `std::mutex`**：`std::mutex` 会把 `pthread_mutex_*` 拖进链接，而本机 MinGW 的 `-lpthread` 解析到**静态** `libpthread.a`，vcpkg 的 `libcpr.dll.a` 又导出了同一批 winpthread 符号 → `multiple definition of pthread_mutex_lock`。日志的临界区极短（拼一行、写一行），自旋锁足够，且完全不引用 pthread 符号（见 §2 的 Windows 陷阱）。
+- **`<mutex>` 只用来拿 `std::lock_guard`**，`std::mutex` 本身刻意不用。
 
 ### `core` 数学层（src/core/math/，零依赖）
 
@@ -284,20 +310,22 @@ GameLoop（QTimer 16ms）
     `viewMatrix()`、`cameraDistance()`、`meshCount()`），判定用 `isXxx()` / `hasXxx()`。
     写成员的 setter 用 `setXxx()`，与成员同名时内部显式写 `this->x = x`
 12. **类名不带 `My` 前缀**：`Camera` / `Model` / `Character` / `Mesh` / `ShaderProgram` / `GLWidget` / `LogManager`
+13. **日志一律走 `LOG_*()`**：不要 `printf`/`std::cout`，一条消息就是一行（`\n` 会被折成 `|`），级别用 `DEBUG/INFO/WARN/ERROR/FATAL`；core/engine 里也不许自己和文件、控制台打交道
 
 ## 10. 测试
 
 ### core / engine 层（随项目构建，无 Qt、无 GPU）
 
 ```
-cmake --build --preset mingw      # 会一并构建两个测试目标
-ctest --test-dir build            # 或直接跑 build\stv3d_core_tests.exe / stv3d_engine_tests.exe
+cmake --build --preset mingw      # 会一并构建三个测试目标
+ctest --test-dir build            # 或直接跑 build\stv3d_*_tests.exe
 ```
 
 | 套件 | 覆盖 | 检查项 |
 |---|---|---|
 | `tests/core_math_test.cpp` | 列主序布局与 `at/column/translation`、乘法与结合、`fromTRS` 的 S→R→T、`lookAt`（含视线与 up 平行退化）、透视投影 **GL[-1,1] 与 Vulkan[0,1]+flipY 两套**、`ortho` 两套、四元数（轴角/复合顺序/共轭/归一化/fromTo/slerp/`fromMat3`↔`toMat3` 一致性）、mat3 逆与行列式、mat4 行列式与逆（含奇异→单位阵） | 67 |
 | `tests/engine_test.cpp` | 摄像机（默认机位、viewMatrix 映射、lookAt、世界/局部旋转、俯仰限位、500 次随机旋转后仍无滚转且正交、moveLocal、**GL/Vulkan 两套投影 + flipY**、fov/aspect 钳制）、模型（S→R→T、`fromTRS` 等价、四元数累积、自转积分、负 dt 不推进）、角色控制器（方向/归一化/疾跑/俯视不出水平面）、角色（TPV 摆放与注视、FPV 眼睛高度与朝向不被覆盖、切模式、轨道限位 ±89°、距离钳制 0.5/100） | 67 |
+| `tests/core_log_test.cpp` | 行格式（`时间戳 [级别] 内容`、逐位校验时间戳）、四个级别的标签、流式拼接（int/`std::string`/bool）、`logFixed`/`logHex` 的精度与状态还原、**4 线程 × 50 行不丢行不串行**、init/shutdown/再 init 的幂等与追加语义、init 之前写 stderr 不丢消息 | 26 |
 
 ### 迁移前的旧测试（已删除，覆盖面对照）
 
@@ -318,18 +346,27 @@ ctest --test-dir build            # 或直接跑 build\stv3d_core_tests.exe / st
 
 ## 11. 已知边界 / TODO
 
-**迁移路线（每一步都能独立编译通过）**
+**下一阶段：去 Qt + 可切换三后端（每一步都能独立编译、测试、运行）**
 
 | # | 步骤 | 状态 |
 |---|---|---|
-| 1 | **修树 + 分层目标**：根目录文件归位到 `src/`；`stv3d_core` / `stv3d_render_gl` / exe / core 单测 立起来（core 零依赖由编译期强制） | ✅ 已完成 |
-| 2 | **补数学**：新增 `conventions.h`、`quat.h`；`mat3/mat4` 修 bug 并补齐 `lookAt / perspective(两套) / ortho / fromTRS / inverse / determinant`；core 单测 67 项 | ✅ 已完成 |
-| 3 | **换类型**：`Camera.h`、`Model.h`、`Character.*` 从 Qt 数学类型换成 `core` 的 `vec3/quat/mat4`，并独立出 `stv3d_engine` 目标（零 Qt）；engine 单测 67 项 | ✅ 已完成 |
-| 4 | **拆网格**：`render/Mesh` 的 GPU 句柄与 `core/geometry/MeshData` 彻底分离，engine 只持有句柄（`Model` 现在仍以 `shared_ptr<Mesh>` 前置声明引用几何） | ⏭ 下一步 |
-| 5 | **抽 RHI**：定义 `IRenderDevice`（`createMesh / beginFrame / submit / endFrame`），GL 调用收进 `render/gl/` | ⏭ |
-| 6 | **抽 engine**：`3d.h` 拆成场景层（模型列表、角色、输入映射）+ 渲染队列 | ⏭ |
-| 7 | **Qt 下沉**：`platform/qt/{QtWindow, QtTimer, QtFileLogSink}` + `app/main` 组装；`core/log/LogManager` 目前仍用 Qt，是唯一"名不副实"的文件 | ⏭ |
-| 8 | **Vulkan 后端**：`render/vk/` 实现同一个 `IRenderDevice`（`ClipDepth::ZeroToOne` + `flipY`、SPIR-V、`NativeWindowHandle`） | ⏭ |
+| A0 | **回退点**：打 tag `qt-final`（指向最后一个带 Qt 的提交 `145af81`） | ✅ 已完成 |
+| A1 | **自建日志层**：`core/log` 改成 std-only（`LOG_*()` 流式宏 + 原子自旋锁，格式与 Qt 版逐字一致），30+ 调用点全部改完，core 彻底 Qt-free；新增 `core_log` 单测 26 项 | ✅ 已完成 |
+| A2 | **去 Qt 的时间与主循环**：`GameLoop` 改用 `std::chrono::steady_clock` + 回调接口，删掉 `QObject/QTimer/signals/slots`，累加器逻辑保持不变 | ⏭ 下一步 |
+| A3 | **Win32 窗口与输入**：`src/platform/win32/Win32Window`（`CreateWindowEx` + `WndProc` + 键盘/鼠标/滚轮事件）+ `src/app/main.cpp` 裸消息泵；`HWND` 同时是 GL/WGL、`VkSurfaceKHR`、DXGI swapchain 的 native handle | ⏭ |
+| A4 | **GL 函数加载表 + 去 qrc**：`src/render/gl/GLFunctions`（X-macro 表 + `wglGetProcAddress`，只加载用到的函数），着色器改磁盘/嵌入头；CMake 删掉 Qt/AUTOMOC/qrc/windeployqt → **Qt 归零**，届时做一次画面回归（机位日志 + 像素聚类） | ⏭ |
+| A5 | **抽 `IRenderDevice`**：按"显式帧模型"设计（`BeginFrame/EndFrame`、CommandList、Pipeline、Buffer、Swapchain、`NativeWindowHandle`、`ClipDepth`），GL 后端先实现；顺带把 `render/Mesh` 的 GPU 句柄与 `core/geometry/MeshData` 彻底分离 | ⏭ |
+| A6 | **Vulkan 后端**：`vcpkg install vulkan-headers vulkan-loader glslang`（本机只有运行时 `vulkan-1.dll`，没有头/导入库），构建期用 `glslangValidator` 把 GLSL 编成 SPIR-V | ⏭ |
+| A7 | **D3D11 后端**：MinGW 自带 `d3d11/dxgi/d3dcompiler` 头与导入库，HLSL 运行时编译（系统自带 `D3DCompiler_47.dll`）；RHI 保留将来加 D3D12 的位置 | ⏭ |
+
+**已完成的 Qt 阶段（历史）**
+
+| # | 步骤 | 状态 |
+|---|---|---|
+| 1 | **修树 + 分层目标**：根目录文件归位到 `src/`；`stv3d_core` / `stv3d_render_gl` / exe / core 单测 立起来（core 零依赖由编译期强制） | ✅ |
+| 2 | **补数学**：新增 `conventions.h`、`quat.h`；`mat3/mat4` 修 bug 并补齐 `lookAt / perspective(两套) / ortho / fromTRS / inverse / determinant`；core 单测 67 项 | ✅ |
+| 3 | **换类型**：`Camera.h`、`Model.h`、`Character.*` 从 Qt 数学类型换成 `core` 的 `vec3/quat/mat4`，并独立出 `stv3d_engine` 目标（零 Qt）；engine 单测 67 项 | ✅ |
+| 4 | **拆网格**：并入 A5（engine 目前仍以 `shared_ptr<Mesh>` 前置声明引用几何） | ⏳ 并入 |
 
 **其他已知边界**
 
@@ -342,6 +379,6 @@ ctest --test-dir build            # 或直接跑 build\stv3d_core_tests.exe / st
 - `src/core/geometry/generator/VertexGen.h` 里的 `void VertexGen()` 仍是空壳
 - **两处待清理的重复**：`src/core/geometry/Mesh.h` 是重构前的死代码（把 GPU 句柄留在了 core 层，
   没人 include），应删掉或改成纯数据；另外 `Vertex` 这个名字同时被 `core/geometry/Vertex.h`
-  （`pos/norm/uv`）与 `render/Mesh.h`（`position/color`）使用，等第 4 步拆网格时统一掉
+  （`pos/norm/uv`）与 `render/Mesh.h`（`position/color`）使用，等 A5 抽 RHI 时统一掉
 - 阴影、光照、纹理、实例化（`glDrawElementsInstanced`）都还没做
 - **注释语言**：源码注释与日志文案已统一为英文；本 README 按你的要求保持中文

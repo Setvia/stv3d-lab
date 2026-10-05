@@ -11,6 +11,7 @@
 #include "geometry/MeshData.h"
 #include "geometry/Triangle.h"
 #include "geometry/Vertex.h"
+#include "log/LogManager.h"
 #include "math/conventions.h"
 #include "math/mat3.h"
 #include "math/mat4.h"
@@ -27,6 +28,8 @@ static_assert(sizeof(mat4) == 16 * sizeof(float), "mat4 must stay tightly packed
 static_assert(sizeof(quat) == 4 * sizeof(float), "quat must stay tightly packed");
 static_assert(sizeof(Vertex) == sizeof(vec3) + sizeof(vec3) + sizeof(vec2),
               "Vertex layout is described to the GPU by the render backend");
+static_assert(static_cast<int>(LogLevel::Fatal) == 4,
+              "LogLevel stays a plain 0..4 enum: the level order is relied upon by the log and the Qt bridge");
 
 namespace
 {

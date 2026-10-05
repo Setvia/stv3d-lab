@@ -1,11 +1,45 @@
 #include "ShaderProgram.h"
 
 #include <QByteArray>
-#include <QDebug>
 #include <QFile>
 #include <QOpenGLContext>
 
+#include "core/log/LogManager.h"
+
+#include <cstring>
+#include <sstream>
+#include <string>
 #include <utility>
+
+namespace
+{
+
+// A GL info log arrives as a NUL-terminated text buffer whose lines are padded with spaces and
+// usually wrapped in newlines. The project writes one message per log line, so the lines are
+// trimmed and joined with " | " instead of letting a driver message break the format.
+std::string sanitizedInfoLog(const QByteArray &info)
+{
+    std::istringstream lines(std::string(info.constData(), std::strlen(info.constData())));
+    std::string text;
+    std::string line;
+    while (std::getline(lines, line))
+    {
+        const std::size_t first = line.find_first_not_of(" \t\r");
+        if (first == std::string::npos)
+        {
+            continue;  // blank line
+        }
+        const std::size_t last = line.find_last_not_of(" \t\r");
+        if (!text.empty())
+        {
+            text += " | ";
+        }
+        text += line.substr(first, last - first + 1);
+    }
+    return text;
+}
+
+}  // namespace
 
 // ---------------- construction / destruction / move ----------------
 
@@ -42,13 +76,13 @@ bool ShaderProgram::readTextFile(const QString &path, QString &outText)
 {
     QFile file(path);  // QFile natively supports Qt resource paths (":/shaders/basic.vert")
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        qCritical().noquote() << "cannot open shader file:" << path;
+        LOG_ERROR() << "cannot open shader file: " << path.toStdString();
         return false;
     }
 
     outText = QString::fromUtf8(file.readAll());
     if (outText.trimmed().isEmpty()) {
-        qCritical().noquote() << "shader file is empty:" << path;
+        LOG_ERROR() << "shader file is empty: " << path.toStdString();
         return false;
     }
     return true;
@@ -71,8 +105,9 @@ bool ShaderProgram::createFromFiles(const QString &vertexPath,
         return false;
     }
 
-    qInfo().noquote() << "shader program ready: id =" << program
-                      << "| vertex:" << vertexPath << "| fragment:" << fragmentPath;
+    LOG_INFO() << "shader program ready: id = " << program
+               << " | vertex: " << vertexPath.toStdString()
+               << " | fragment: " << fragmentPath.toStdString();
     return true;
 }
 
@@ -84,12 +119,12 @@ bool ShaderProgram::createFromSource(const QString &vertexSource,
     // initializeOpenGLFunctions() directly hits a null pointer inside Qt (it does crash in practice),
     // so we must block it here
     if (QOpenGLContext::currentContext() == nullptr) {
-        qCritical("No current OpenGL context; cannot create the shader program (create it inside initializeGL())");
+        LOG_ERROR() << "No current OpenGL context; cannot create the shader program (create it inside initializeGL())";
         return false;
     }
 
     if (!initializeOpenGLFunctions()) {
-        qCritical("Failed to load the OpenGL 4.3 Core functions (context version too low)");
+        LOG_ERROR() << "Failed to load the OpenGL 4.3 Core functions (context version too low)";
         return false;
     }
 
@@ -144,7 +179,7 @@ GLuint ShaderProgram::compileShader(GLenum type, const QString &source, const QS
         glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &length);
         QByteArray info(length > 0 ? length : 1, '\0');
         glGetShaderInfoLog(shader, length, nullptr, info.data());
-        qCritical().noquote() << label << "compile failed:" << QString::fromUtf8(info).trimmed();
+        LOG_ERROR() << label.toStdString() << ": compile failed: " << sanitizedInfoLog(info);
         glDeleteShader(shader);
         return 0;
     }
@@ -172,7 +207,7 @@ bool ShaderProgram::linkProgram(GLuint vertexShader, GLuint fragmentShader,
         glGetProgramiv(program, GL_INFO_LOG_LENGTH, &length);
         QByteArray info(length > 0 ? length : 1, '\0');
         glGetProgramInfoLog(program, length, nullptr, info.data());
-        qCritical().noquote() << "program link failed:" << QString::fromUtf8(info).trimmed();
+        LOG_ERROR() << "program link failed: " << sanitizedInfoLog(info);
         glDeleteProgram(program);
         program = 0;
         return false;
@@ -210,7 +245,7 @@ GLint ShaderProgram::uniformLocation(const char *name)
 
     const GLint location = glGetUniformLocation(program, name);
     if (location < 0) {
-        qWarning().noquote() << "uniform not found (it may have been optimized away by the compiler):" << name;
+        LOG_WARNING() << "uniform not found (it may have been optimized away by the compiler): " << name;
     }
     uniform_cache.emplace(key, location);
     return location;
