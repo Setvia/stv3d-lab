@@ -21,12 +21,12 @@ int main(int argc, char* argv[]) {
 
     // Logging: open <exe dir>/stv3d-lab.log and redirect all of Qt's logging there
     // (nothing is printed to the command line anymore)
-    if (!MyLogManager::init()) {
+    if (!LogManager::init()) {
         return 1;  // If logging cannot even be opened, there is no point continuing
     }
 
     // Create the main window
-    MyGLWidget window;
+    GLWidget window;
     window.resize(800, 600);
     window.setWindowTitle(QStringLiteral("stv3d-lab"));
     window.show();
@@ -40,6 +40,6 @@ int main(int argc, char* argv[]) {
 
     // Log shutdown handling
     qInfo().noquote() << "===== stv3d-lab exit, code =" << exit_code << "=====";
-    MyLogManager::shutdown();
+    LogManager::shutdown();
     return exit_code;
 }

@@ -15,17 +15,17 @@ QMutex g_log_mutex;
 
 }  // namespace
 
-QString MyLogManager::logFilePath()
+QString LogManager::logFilePath()
 {
     return QCoreApplication::applicationDirPath() + QStringLiteral("/stv3d-lab.log");
 }
 
-bool MyLogManager::isReady()
+bool LogManager::isReady()
 {
     return g_log_file != nullptr && g_log_file->isOpen();
 }
 
-bool MyLogManager::init()
+bool LogManager::init()
 {
     // Static storage duration: the lifetime spans the whole process, avoiding a dangling pointer
     // if the file object were on the stack while the handler was still alive
@@ -40,11 +40,11 @@ bool MyLogManager::init()
     log_file.flush();
 
     g_log_file = &log_file;
-    qInstallMessageHandler(&MyLogManager::messageHandler);
+    qInstallMessageHandler(&LogManager::messageHandler);
     return true;
 }
 
-void MyLogManager::shutdown()
+void LogManager::shutdown()
 {
     qInstallMessageHandler(nullptr);
 
@@ -56,7 +56,7 @@ void MyLogManager::shutdown()
     }
 }
 
-void MyLogManager::messageHandler(QtMsgType type, const QMessageLogContext &, const QString &message)
+void LogManager::messageHandler(QtMsgType type, const QMessageLogContext &, const QString &message)
 {
     const char *level = "INFO";
     switch (type) {

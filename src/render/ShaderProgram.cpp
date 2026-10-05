@@ -9,36 +9,36 @@
 
 // ---------------- construction / destruction / move ----------------
 
-MyShaderProgram::~MyShaderProgram()
+ShaderProgram::~ShaderProgram()
 {
     // Note: the caller must guarantee a "current GL context" here
-    // (MyGLWidget is destroyed after makeCurrent())
+    // (GLWidget is destroyed after makeCurrent())
     destroy();
 }
 
-MyShaderProgram::MyShaderProgram(MyShaderProgram &&other) noexcept
-    : m_program(other.m_program), m_uniform_cache(std::move(other.m_uniform_cache))
+ShaderProgram::ShaderProgram(ShaderProgram &&other) noexcept
+    : program(other.program), uniform_cache(std::move(other.uniform_cache))
 {
-    other.m_program = 0;  // handle ownership transfer, so the source does not delete it when destroyed
+    other.program = 0;  // handle ownership transfer, so the source does not delete it when destroyed
 }
 
-MyShaderProgram &MyShaderProgram::operator=(MyShaderProgram &&other) noexcept
+ShaderProgram &ShaderProgram::operator=(ShaderProgram &&other) noexcept
 {
     if (this != &other) {
         destroy();
 
-        m_program = other.m_program;
-        m_uniform_cache = std::move(other.m_uniform_cache);
+        program = other.program;
+        uniform_cache = std::move(other.uniform_cache);
 
-        other.m_program = 0;
-        other.m_uniform_cache.clear();
+        other.program = 0;
+        other.uniform_cache.clear();
     }
     return *this;
 }
 
 // ---------------- file reading ----------------
 
-bool MyShaderProgram::readTextFile(const QString &path, QString &outText)
+bool ShaderProgram::readTextFile(const QString &path, QString &outText)
 {
     QFile file(path);  // QFile natively supports Qt resource paths (":/shaders/basic.vert")
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
@@ -56,7 +56,7 @@ bool MyShaderProgram::readTextFile(const QString &path, QString &outText)
 
 // ---------------- create / destroy ----------------
 
-bool MyShaderProgram::createFromFiles(const QString &vertexPath,
+bool ShaderProgram::createFromFiles(const QString &vertexPath,
                                       const QString &fragmentPath,
                                       const std::vector<AttributeBinding> &attributeBindings)
 {
@@ -71,12 +71,12 @@ bool MyShaderProgram::createFromFiles(const QString &vertexPath,
         return false;
     }
 
-    qInfo().noquote() << "shader program ready: id =" << m_program
+    qInfo().noquote() << "shader program ready: id =" << program
                       << "| vertex:" << vertexPath << "| fragment:" << fragmentPath;
     return true;
 }
 
-bool MyShaderProgram::createFromSource(const QString &vertexSource,
+bool ShaderProgram::createFromSource(const QString &vertexSource,
                                        const QString &fragmentSource,
                                        const std::vector<AttributeBinding> &attributeBindings)
 {
@@ -104,8 +104,8 @@ bool MyShaderProgram::createFromSource(const QString &vertexSource,
     const bool linked = linkProgram(vs, fs, attributeBindings);
 
     // Clean up the shader objects regardless of success (they are useless after linking)
-    glDetachShader(m_program, vs);
-    glDetachShader(m_program, fs);
+    glDetachShader(program, vs);
+    glDetachShader(program, fs);
     glDeleteShader(vs);
     glDeleteShader(fs);
 
@@ -113,22 +113,22 @@ bool MyShaderProgram::createFromSource(const QString &vertexSource,
         return false;
     }
 
-    m_uniform_cache.clear();  // uniform locations must be queried again for the new program
+    uniform_cache.clear();  // uniform locations must be queried again for the new program
     return true;
 }
 
-void MyShaderProgram::destroy()
+void ShaderProgram::destroy()
 {
-    if (m_program != 0) {
-        glDeleteProgram(m_program);
-        m_program = 0;
+    if (program != 0) {
+        glDeleteProgram(program);
+        program = 0;
     }
-    m_uniform_cache.clear();
+    uniform_cache.clear();
 }
 
 // ---------------- compile / link ----------------
 
-GLuint MyShaderProgram::compileShader(GLenum type, const QString &source, const QString &label)
+GLuint ShaderProgram::compileShader(GLenum type, const QString &source, const QString &label)
 {
     const QByteArray utf8 = source.toUtf8();  // GLSL takes a byte stream, so convert the Qt string to UTF-8 first
 
@@ -151,30 +151,30 @@ GLuint MyShaderProgram::compileShader(GLenum type, const QString &source, const 
     return shader;
 }
 
-bool MyShaderProgram::linkProgram(GLuint vertexShader, GLuint fragmentShader,
+bool ShaderProgram::linkProgram(GLuint vertexShader, GLuint fragmentShader,
                                   const std::vector<AttributeBinding> &attributeBindings)
 {
-    m_program = glCreateProgram();
-    glAttachShader(m_program, vertexShader);
-    glAttachShader(m_program, fragmentShader);
+    program = glCreateProgram();
+    glAttachShader(program, vertexShader);
+    glAttachShader(program, fragmentShader);
 
     // Explicitly bind the attribute numbers (belt and braces alongside layout(location = N) in the shader)
     for (const AttributeBinding &binding : attributeBindings) {
-        glBindAttribLocation(m_program, binding.location, binding.name);
+        glBindAttribLocation(program, binding.location, binding.name);
     }
 
-    glLinkProgram(m_program);
+    glLinkProgram(program);
 
     GLint linked = GL_FALSE;
-    glGetProgramiv(m_program, GL_LINK_STATUS, &linked);
+    glGetProgramiv(program, GL_LINK_STATUS, &linked);
     if (linked != GL_TRUE) {
         GLint length = 0;
-        glGetProgramiv(m_program, GL_INFO_LOG_LENGTH, &length);
+        glGetProgramiv(program, GL_INFO_LOG_LENGTH, &length);
         QByteArray info(length > 0 ? length : 1, '\0');
-        glGetProgramInfoLog(m_program, length, nullptr, info.data());
+        glGetProgramInfoLog(program, length, nullptr, info.data());
         qCritical().noquote() << "program link failed:" << QString::fromUtf8(info).trimmed();
-        glDeleteProgram(m_program);
-        m_program = 0;
+        glDeleteProgram(program);
+        program = 0;
         return false;
     }
     return true;
@@ -182,41 +182,41 @@ bool MyShaderProgram::linkProgram(GLuint vertexShader, GLuint fragmentShader,
 
 // ---------------- usage ----------------
 
-void MyShaderProgram::bind()
+void ShaderProgram::bind()
 {
     if (isValid()) {
-        glUseProgram(m_program);
+        glUseProgram(program);
     }
 }
 
-void MyShaderProgram::release()
+void ShaderProgram::release()
 {
     glUseProgram(0);
 }
 
 // ---------------- uniform ----------------
 
-GLint MyShaderProgram::uniformLocation(const char *name)
+GLint ShaderProgram::uniformLocation(const char *name)
 {
     if (!isValid() || name == nullptr) {
         return -1;
     }
 
     const std::string key(name);
-    const auto found = m_uniform_cache.find(key);
-    if (found != m_uniform_cache.end()) {
+    const auto found = uniform_cache.find(key);
+    if (found != uniform_cache.end()) {
         return found->second;  // cache hit, no GL access needed
     }
 
-    const GLint location = glGetUniformLocation(m_program, name);
+    const GLint location = glGetUniformLocation(program, name);
     if (location < 0) {
         qWarning().noquote() << "uniform not found (it may have been optimized away by the compiler):" << name;
     }
-    m_uniform_cache.emplace(key, location);
+    uniform_cache.emplace(key, location);
     return location;
 }
 
-bool MyShaderProgram::setMat4(const char *name, const mat4 &value)
+bool ShaderProgram::setMat4(const char *name, const mat4 &value)
 {
     const GLint location = uniformLocation(name);
     if (location < 0) {
@@ -227,7 +227,7 @@ bool MyShaderProgram::setMat4(const char *name, const mat4 &value)
     return true;
 }
 
-bool MyShaderProgram::setVec3(const char *name, const vec3 &value)
+bool ShaderProgram::setVec3(const char *name, const vec3 &value)
 {
     const GLint location = uniformLocation(name);
     if (location < 0) {
@@ -237,7 +237,7 @@ bool MyShaderProgram::setVec3(const char *name, const vec3 &value)
     return true;
 }
 
-bool MyShaderProgram::setFloat(const char *name, float value)
+bool ShaderProgram::setFloat(const char *name, float value)
 {
     const GLint location = uniformLocation(name);
     if (location < 0) {

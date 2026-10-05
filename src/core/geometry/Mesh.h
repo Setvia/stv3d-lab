@@ -15,21 +15,21 @@ struct Mesh
     static constexpr uint8_t kAttribColor = 1;
     static constexpr uint8_t kBindingInterLeaved = 0;
 
-    uint32_t m_vao = 0;
-    uint32_t m_vbo = 0;
-    uint32_t m_ebo = 0;
-    int32_t m_idc = 0;
+    uint32_t vao = 0;
+    uint32_t vbo = 0;
+    uint32_t ebo = 0;
+    int32_t idc = 0;
 
     // Constructor
     constexpr Mesh() noexcept {}
     constexpr Mesh(const Mesh &) = delete;
     constexpr Mesh(Mesh &&other) noexcept
-        : m_vao(other.m_vao), m_vbo(other.m_vbo), m_ebo(other.m_ebo), m_idc(other.m_idc)
+        : vao(other.vao), vbo(other.vbo), ebo(other.ebo), idc(other.idc)
     {
-        other.m_vao = 0;
-        other.m_vbo = 0;
-        other.m_ebo = 0;
-        other.m_idc = 0;
+        other.vao = 0;
+        other.vbo = 0;
+        other.ebo = 0;
+        other.idc = 0;
     }
 
     // Assign
@@ -39,15 +39,15 @@ struct Mesh
         if (this != &other) {
             destroy();
 
-            m_vao = other.m_vao;
-            m_vbo = other.m_vbo;
-            m_ebo = other.m_ebo;
-            m_idc = other.m_idc;
+            vao = other.vao;
+            vbo = other.vbo;
+            ebo = other.ebo;
+            idc = other.idc;
 
-            other.m_vao = 0;
-            other.m_vbo = 0;
-            other.m_ebo = 0;
-            other.m_idc = 0;
+            other.vao = 0;
+            other.vbo = 0;
+            other.ebo = 0;
+            other.idc = 0;
         }
         return *this;
     }
@@ -72,7 +72,7 @@ struct Mesh
 
     bool isValid() const
     {
-        return m_vao != 0 && m_idc > 0;
+        return vao != 0 && idc > 0;
     }
 
     void draw()

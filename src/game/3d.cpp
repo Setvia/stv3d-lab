@@ -4,7 +4,7 @@
 #include <QOpenGLContext>
 
 // ---------- Construction / destruction ----------
-MyGLWidget::MyGLWidget(QWidget *parent) : QOpenGLWidget(parent)
+GLWidget::GLWidget(QWidget *parent) : QOpenGLWidget(parent)
 {
     // QOpenGLWidget takes no keyboard focus by default; it must be set explicitly or keyPressEvent never arrives
     setFocusPolicy(Qt::StrongFocus);
@@ -13,20 +13,20 @@ MyGLWidget::MyGLWidget(QWidget *parent) : QOpenGLWidget(parent)
     // Main loop driving:
     //   ticked       -- fixed step (1/60 s by default) logic update: model spin, character advance, keyboard camera movement
     //   frameStepped -- once per frame: request a repaint only (rendering decoupled from logic)
-    connect(&m_game_loop, &GameLoop::ticked, this, [this](std::uint64_t) { onGameTick(); });
-    connect(&m_game_loop, &GameLoop::frameStepped, this, [this](float) { onGameFrame(); });
+    connect(&game_loop, &GameLoop::ticked, this, [this](std::uint64_t) { onGameTick(); });
+    connect(&game_loop, &GameLoop::frameStepped, this, [this](float) { onGameFrame(); });
 
-    m_game_loop.init();
-    m_game_loop.start();
+    game_loop.init();
+    game_loop.start();
 
-    qInfo().noquote() << "game loop started: fixed tick =" << m_game_loop.fixedTickSeconds()
-                      << "s, frame interval =" << m_game_loop.frameInterval() << "ms";
+    qInfo().noquote() << "game loop started: fixed tick =" << game_loop.getFixedTickSeconds()
+                      << "s, frame interval =" << game_loop.getFrameInterval() << "ms";
     qInfo().noquote() << "initial camera view:"
-                      << (m_camera_view == CameraView::FPV ? "FPV" : "TPV")
+                      << (camera_view == CameraView::FPV ? "FPV" : "TPV")
                       << "(press F5 to switch view mode)";
 }
 
-MyGLWidget::~MyGLWidget()
+GLWidget::~GLWidget()
 {
     // GL objects must be destroyed while the context is valid, hence makeCurrent()
     makeCurrent();
@@ -35,59 +35,59 @@ MyGLWidget::~MyGLWidget()
 }
 
 // ---------- Camera ----------
-void MyGLWidget::setCamera(const vec3 &eye, const vec3 &target, const vec3 &up)
+void GLWidget::setCamera(const vec3 &eye, const vec3 &target, const vec3 &up)
 {
-    MyCamera &camera = m_character.camera();
+    Camera &camera = character.getCamera();
     camera.setPosition(eye);
     camera.lookAt(target, up);  // the orientation is converted to a quaternion; target/up are not stored
     logCameraPositionIfMoved();
     update();
 }
 
-void MyGLWidget::resetCamera()
+void GLWidget::resetCamera()
 {
-    m_character.setPosition(vec3{0.0f, 0.0f, 0.0f});
-    m_character.setCameraOffset(vec3{0.0f, 2.0f, 5.0f});  // reset the TPV orbit offset
+    character.setPosition(vec3{0.0f, 0.0f, 0.0f});
+    character.setCameraOffset(vec3{0.0f, 2.0f, 5.0f});  // reset the TPV orbit offset
 
-    MyCamera &camera = m_character.camera();
+    Camera &camera = character.getCamera();
     camera.setOrientation(quat{});  // identity quaternion = looking down -Z, up is +Y
     camera.setPerspective(90.0f, 0.1f, 100.0f);
-    m_character.syncCamera();  // reposition for the current view mode
+    character.syncCamera();  // reposition for the current view mode
     syncCharacterModel();
 
-    m_has_logged_camera = false;  // make the next frame log for sure
+    has_logged_camera = false;  // make the next frame log for sure
     logCameraPositionIfMoved();
     update();
 }
 
 // ---------- View-mode switch (FPV / TPV) ----------
-void MyGLWidget::setCameraView(CameraView view)
+void GLWidget::setCameraView(CameraView view)
 {
-    if (m_camera_view == view) {
+    if (camera_view == view) {
         return;
     }
 
-    m_camera_view = view;
-    m_character.setView(view);  // the character repositions the camera for the new mode
+    camera_view = view;
+    character.setView(view);  // the character repositions the camera for the new mode
     clearCameraInput();         // avoids "stuck keys" at the moment of switching
 
-    qInfo().noquote() << "camera view:" << (m_camera_view == CameraView::FPV ? "FPV" : "TPV");
+    qInfo().noquote() << "camera view:" << (camera_view == CameraView::FPV ? "FPV" : "TPV");
     logCameraPositionIfMoved();
     update();
 }
 
-void MyGLWidget::clearCameraInput()
+void GLWidget::clearCameraInput()
 {
-    m_input = CameraInput{};
+    input = CameraInput{};
 }
 
 // ---------- Main loop: fixed-step logic update ----------
-void MyGLWidget::onGameTick()
+void GLWidget::onGameTick()
 {
-    const float dt = static_cast<float>(m_game_loop.fixedTickSeconds());
+    const float dt = static_cast<float>(game_loop.getFixedTickSeconds());
 
     // each model advances at its own spin rate (fixed step -> independent of frame rate)
-    for (MyModel &model : m_models) {
+    for (Model &model : models) {
         model.updateSpin(dt);
     }
 
@@ -96,66 +96,66 @@ void MyGLWidget::onGameTick()
 }
 
 // ---------- Main loop: per frame, only request a repaint ----------
-void MyGLWidget::onGameFrame()
+void GLWidget::onGameFrame()
 {
     update();
 }
 
 // ---------- Input -> character -> camera (FPV and TPV share this logic) ----------
-void MyGLWidget::updateCharacter(float dt)
+void GLWidget::updateCharacter(float dt)
 {
     if (dt <= 0.0f) {
         return;
     }
 
-    m_character.controller().setInput(characterInputFromKeys());
-    m_character.update(dt);  // advance the character position and reposition the camera for the current view mode
+    character.getController().setInput(characterInputFromKeys());
+    character.update(dt);  // advance the character position and reposition the camera for the current view mode
     syncCharacterModel();
     logCameraPositionIfMoved();
 }
 
 // keyboard state -> character controller input
-MyCharacterController::InputState MyGLWidget::characterInputFromKeys() const
+CharacterController::InputState GLWidget::characterInputFromKeys() const
 {
-    MyCharacterController::InputState input;
-    input.forward = m_input.forward;
-    input.backward = m_input.backward;
-    input.left = m_input.left;
-    input.right = m_input.right;
-    input.sprint = m_input.fast;
-    input.jump = m_input.up;  // no physics yet; wire up the intent now, implement it once jumping is added
-    return input;
+    CharacterController::InputState state;
+    state.forward = this->input.forward;
+    state.backward = this->input.backward;
+    state.left = this->input.left;
+    state.right = this->input.right;
+    state.sprint = this->input.fast;
+    state.jump = this->input.up;  // no physics yet; wire up the intent now, implement it once jumping is added
+    return state;
 }
 
 // character placeholder model: follows the character (the cube center is raised to waist height)
-void MyGLWidget::syncCharacterModel()
+void GLWidget::syncCharacterModel()
 {
-    if (!m_character_model.hasMesh()) {
+    if (!character_model.hasMesh()) {
         return;
     }
-    m_character_model.setPosition(m_character.position() + vec3{0.0f, 0.9f, 0.0f});
+    character_model.setPosition(character.getPosition() + vec3{0.0f, 0.9f, 0.0f});
 }
 
 // Camera pose log: a line is written only when the position or orientation changes past a threshold (an FPV head turn still counts)
-void MyGLWidget::logCameraPositionIfMoved()
+void GLWidget::logCameraPositionIfMoved()
 {
-    const MyCamera &camera = m_character.camera();
-    const vec3 position = camera.position();
+    const Camera &camera = character.getCamera();
+    const vec3 position = camera.getPosition();
     const vec3 forward_dir = camera.forward();
 
-    const bool position_changed = !m_has_logged_camera
-                                  || (position - m_last_logged_camera_position).length() >= m_log_move_threshold;
-    const bool forward_changed = !m_has_logged_camera
-                                 || forward_dir.dot(m_last_logged_camera_forward) < 0.999f;
+    const bool position_changed = !has_logged_camera
+                                  || (position - last_logged_camera_position).length() >= log_move_threshold;
+    const bool forward_changed = !has_logged_camera
+                                 || forward_dir.dot(last_logged_camera_forward) < 0.999f;
     if (!position_changed && !forward_changed) {
         return;
     }
 
-    m_has_logged_camera = true;
-    m_last_logged_camera_position = position;
-    m_last_logged_camera_forward = forward_dir;
+    has_logged_camera = true;
+    last_logged_camera_position = position;
+    last_logged_camera_forward = forward_dir;
     qInfo().noquote() << QStringLiteral("camera[%1]: eye(%2, %3, %4) forward(%5, %6, %7)")
-                             .arg(m_camera_view == CameraView::FPV ? QStringLiteral("FPV") : QStringLiteral("TPV"))
+                             .arg(camera_view == CameraView::FPV ? QStringLiteral("FPV") : QStringLiteral("TPV"))
                              .arg(position.x, 0, 'f', 2)
                              .arg(position.y, 0, 'f', 2)
                              .arg(position.z, 0, 'f', 2)
@@ -165,18 +165,18 @@ void MyGLWidget::logCameraPositionIfMoved()
 }
 
 // ---------- Keyboard: drive the camera ----------
-void MyGLWidget::keyPressEvent(QKeyEvent *event)
+void GLWidget::keyPressEvent(QKeyEvent *event)
 {
     switch (event->key()) {
-        case Qt::Key_W: case Qt::Key_Up:    m_input.forward = true;  break;
-        case Qt::Key_S: case Qt::Key_Down:  m_input.backward = true; break;
-        case Qt::Key_A: case Qt::Key_Left:  m_input.left = true;     break;
-        case Qt::Key_D: case Qt::Key_Right: m_input.right = true;    break;
-        case Qt::Key_Space: case Qt::Key_E: m_input.up = true;       break;
-        case Qt::Key_C: case Qt::Key_Q:     m_input.down = true;     break;
-        case Qt::Key_Shift:                 m_input.fast = true;     break;
+        case Qt::Key_W: case Qt::Key_Up:    input.forward = true;  break;
+        case Qt::Key_S: case Qt::Key_Down:  input.backward = true; break;
+        case Qt::Key_A: case Qt::Key_Left:  input.left = true;     break;
+        case Qt::Key_D: case Qt::Key_Right: input.right = true;    break;
+        case Qt::Key_Space: case Qt::Key_E: input.up = true;       break;
+        case Qt::Key_C: case Qt::Key_Q:     input.down = true;     break;
+        case Qt::Key_Shift:                 input.fast = true;     break;
         // View-mode switch. Tab is not used: Qt swallows it in QWidget::event() for focus handling, so keyPressEvent never arrives
-        case Qt::Key_F5:                    setCameraView(m_camera_view == CameraView::FPV
+        case Qt::Key_F5:                    setCameraView(camera_view == CameraView::FPV
                                                               ? CameraView::TPV
                                                               : CameraView::FPV); break;
         case Qt::Key_R:                     resetCamera();           break;
@@ -188,16 +188,16 @@ void MyGLWidget::keyPressEvent(QKeyEvent *event)
     event->accept();
 }
 
-void MyGLWidget::keyReleaseEvent(QKeyEvent *event)
+void GLWidget::keyReleaseEvent(QKeyEvent *event)
 {
     switch (event->key()) {
-        case Qt::Key_W: case Qt::Key_Up:    m_input.forward = false;  break;
-        case Qt::Key_S: case Qt::Key_Down:  m_input.backward = false; break;
-        case Qt::Key_A: case Qt::Key_Left:  m_input.left = false;     break;
-        case Qt::Key_D: case Qt::Key_Right: m_input.right = false;    break;
-        case Qt::Key_Space: case Qt::Key_E: m_input.up = false;       break;
-        case Qt::Key_C: case Qt::Key_Q:     m_input.down = false;     break;
-        case Qt::Key_Shift:                 m_input.fast = false;     break;
+        case Qt::Key_W: case Qt::Key_Up:    input.forward = false;  break;
+        case Qt::Key_S: case Qt::Key_Down:  input.backward = false; break;
+        case Qt::Key_A: case Qt::Key_Left:  input.left = false;     break;
+        case Qt::Key_D: case Qt::Key_Right: input.right = false;    break;
+        case Qt::Key_Space: case Qt::Key_E: input.up = false;       break;
+        case Qt::Key_C: case Qt::Key_Q:     input.down = false;     break;
+        case Qt::Key_Shift:                 input.fast = false;     break;
         default:
             QOpenGLWidget::keyReleaseEvent(event);
             return;
@@ -206,7 +206,7 @@ void MyGLWidget::keyReleaseEvent(QKeyEvent *event)
 }
 
 // ---------- Wheel: TPV dollies the follow distance in/out / FPV zooms the field of view ----------
-void MyGLWidget::wheelEvent(QWheelEvent *event)
+void GLWidget::wheelEvent(QWheelEvent *event)
 {
     const float steps = static_cast<float>(event->angleDelta().y()) / 120.0f;  // one notch = 120
     if (steps == 0.0f) {
@@ -214,13 +214,13 @@ void MyGLWidget::wheelEvent(QWheelEvent *event)
         return;
     }
 
-    MyCamera &camera = m_character.camera();
-    if (m_camera_view == CameraView::TPV) {
-        m_character.setCameraDistance(m_character.cameraDistance() - steps * m_wheel_step);
+    Camera &camera = character.getCamera();
+    if (camera_view == CameraView::TPV) {
+        character.setCameraDistance(character.cameraDistance() - steps * wheel_step);
     } else {
         // FPV: the wheel is used as zoom (20° to 110°)
-        camera.setPerspective(camera.fovYDegrees() - steps * 2.0f,
-                              camera.nearPlane(), camera.farPlane());
+        camera.setPerspective(camera.getFovYDegrees() - steps * 2.0f,
+                              camera.getNearPlane(), camera.getFarPlane());
     }
 
     logCameraPositionIfMoved();
@@ -229,11 +229,11 @@ void MyGLWidget::wheelEvent(QWheelEvent *event)
 }
 
 // ---------- Left-button drag: FPV free look / TPV orbit around the character ----------
-void MyGLWidget::mousePressEvent(QMouseEvent *event)
+void GLWidget::mousePressEvent(QMouseEvent *event)
 {
     if (event->button() == Qt::LeftButton) {
-        m_orbiting = true;
-        m_last_mouse_pos = event->position().toPoint();
+        orbiting = true;
+        last_mouse_pos = event->position().toPoint();
         setCursor(Qt::ClosedHandCursor);
         event->accept();
         return;
@@ -241,27 +241,27 @@ void MyGLWidget::mousePressEvent(QMouseEvent *event)
     QOpenGLWidget::mousePressEvent(event);
 }
 
-void MyGLWidget::mouseMoveEvent(QMouseEvent *event)
+void GLWidget::mouseMoveEvent(QMouseEvent *event)
 {
-    if (!m_orbiting) {
+    if (!orbiting) {
         QOpenGLWidget::mouseMoveEvent(event);
         return;
     }
 
     const QPoint current_pos = event->position().toPoint();
-    const QPoint delta = current_pos - m_last_mouse_pos;
-    m_last_mouse_pos = current_pos;
+    const QPoint delta = current_pos - last_mouse_pos;
+    last_mouse_pos = current_pos;
 
-    const float dx = static_cast<float>(delta.x()) * m_orbit_speed;
-    const float dy = static_cast<float>(delta.y()) * m_orbit_speed;
+    const float dx = static_cast<float>(delta.x()) * orbit_speed;
+    const float dy = static_cast<float>(delta.y()) * orbit_speed;
 
-    if (m_camera_view == CameraView::FPV) {
+    if (camera_view == CameraView::FPV) {
         // First person: drag right -> the view turns right (negative yaw); drag down -> look down (negative pitch)
-        // Pitch clamping is handled inside MyCamera::yawPitch (no Euler angles are stored)
-        m_character.camera().yawPitch(-dx, -dy);
+        // Pitch clamping is handled inside Camera::yawPitch (no Euler angles are stored)
+        character.getCamera().yawPitch(-dx, -dy);
     } else {
         // Third person: drag right -> the camera swings to the left; drag down -> the camera rises ("grab and drag the character" feel)
-        m_character.orbitCamera(-dx, dy);
+        character.orbitCamera(-dx, dy);
     }
 
     logCameraPositionIfMoved();
@@ -269,10 +269,10 @@ void MyGLWidget::mouseMoveEvent(QMouseEvent *event)
     event->accept();
 }
 
-void MyGLWidget::mouseReleaseEvent(QMouseEvent *event)
+void GLWidget::mouseReleaseEvent(QMouseEvent *event)
 {
-    if (event->button() == Qt::LeftButton && m_orbiting) {
-        m_orbiting = false;
+    if (event->button() == Qt::LeftButton && orbiting) {
+        orbiting = false;
         unsetCursor();
         event->accept();
         return;
@@ -281,14 +281,14 @@ void MyGLWidget::mouseReleaseEvent(QMouseEvent *event)
 }
 
 // ---------- Shaders: sources in shaders/basic.vert / basic.frag, embedded into the exe via stv3d-lab.qrc ----------
-// Compilation, linking, error logging and uniform location caching are all handled by MyShaderProgram (see myShader.h/.cpp)
-void MyGLWidget::createShaderProgram()
+// Compilation, linking, error logging and uniform location caching are all handled by ShaderProgram (see Shader.h/.cpp)
+void GLWidget::createShaderProgram()
 {
-    const bool ok = m_program.createFromFiles(
+    const bool ok = program.createFromFiles(
         QStringLiteral(":/shaders/basic.vert"),
         QStringLiteral(":/shaders/basic.frag"),
-        // explicit attribute index binding (index constants live in MyMesh, so shader and mesh share one numbering)
-        {{MyMesh::kAttribPos, "aPos"}, {MyMesh::kAttribColor, "aColor"}});
+        // explicit attribute index binding (index constants live in Mesh, so shader and mesh share one numbering)
+        {{Mesh::kAttribPos, "aPos"}, {Mesh::kAttribColor, "aColor"}});
 
     if (!ok) {
         qCritical("shader program creation failed; models cannot be drawn");
@@ -296,20 +296,20 @@ void MyGLWidget::createShaderProgram()
 }
 
 // ---------- Build the scene: one mesh + several independent models ----------
-void MyGLWidget::createScene()
+void GLWidget::createScene()
 {
     // (1) Geometry: the cube is uploaded once and placed into the mesh library
-    std::vector<MyVertex> vertices;
+    std::vector<Vertex> vertices;
     std::vector<GLuint> indices;
-    MyMeshFactory::makeCube(vertices, indices, 1.0f);
+    MeshFactory::makeCube(vertices, indices, 1.0f);
 
-    auto cube_mesh = std::make_shared<MyMesh>();
+    auto cube_mesh = std::make_shared<Mesh>();
     cube_mesh->create(vertices, indices);
     if (!cube_mesh->isValid()) {
         qCritical("cube mesh creation failed");
         return;
     }
-    m_meshes.push_back(cube_mesh);
+    meshes.push_back(cube_mesh);
 
     // (2) Models: three independent models share the same geometry but differ in position, scale and spin
     struct ModelSpec
@@ -327,35 +327,35 @@ void MyGLWidget::createScene()
     };
 
     for (const ModelSpec &spec : specs) {
-        MyModel model(cube_mesh);  // * shares the same mesh
+        Model model(cube_mesh);  // * shares the same mesh
         model.setPosition(spec.position);
         model.setUniformScale(spec.scale);
         model.setSpin(spec.spin_degrees_per_second, spec.spin_axis);
-        m_models.push_back(std::move(model));
+        models.push_back(std::move(model));
     }
 
     // (3) Character placeholder model: reuses the same cube geometry, scaled down into a "humanoid placeholder"; follows the character
-    m_character_model = MyModel(cube_mesh);
-    m_character_model.setUniformScale(0.6f);
-    m_character_model.setSpin(0.0f);  // the character does not spin
+    character_model = Model(cube_mesh);
+    character_model.setUniformScale(0.6f);
+    character_model.setSpin(0.0f);  // the character does not spin
     syncCharacterModel();
 
-    qInfo().noquote() << "scene:" << m_meshes.size() << "mesh(es),"
-                      << (m_models.size() + 1) << "model(s)";
+    qInfo().noquote() << "scene:" << meshes.size() << "mesh(es),"
+                      << (models.size() + 1) << "model(s)";
 }
 
 // ---------- Explicitly release all GL resources (requires a current context) ----------
-void MyGLWidget::releaseGlResources()
+void GLWidget::releaseGlResources()
 {
     // mesh objects call glDelete* in their destructor, so clearing the containers is enough (shared_ptr refcount reaches zero)
-    m_models.clear();
-    m_meshes.clear();
+    models.clear();
+    meshes.clear();
 
-    m_program.destroy();
+    program.destroy();
 }
 
 // ---------- Initialization ----------
-void MyGLWidget::initializeGL()
+void GLWidget::initializeGL()
 {
     if (!initializeOpenGLFunctions()) {
         qCritical("failed to load the OpenGL 4.3 Core functions (context version too low; check the QSurfaceFormat in main.cpp)");
@@ -383,40 +383,40 @@ void MyGLWidget::initializeGL()
 }
 
 // ---------- Resize ----------
-void MyGLWidget::resizeGL(int w, int h)
+void GLWidget::resizeGL(int w, int h)
 {
     glViewport(0, 0, w, h);
     // only the new aspect ratio is handed to the camera; fov / near / far are held by the camera itself
-    m_character.camera().setViewportAspect(h > 0 ? float(w) / float(h) : 1.0f);
+    character.getCamera().setViewportAspect(h > 0 ? float(w) / float(h) : 1.0f);
 }
 
 // ---------- Drawing: walk the model list, one draw call per model ----------
-void MyGLWidget::paintGL()
+void GLWidget::paintGL()
 {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    const MyCamera &camera = m_character.camera();
+    const Camera &camera = character.getCamera();
     const mat4 view_projection = camera.projectionMatrix() * camera.viewMatrix();
 
-    m_program.bind();  // all models share the same shader program
+    program.bind();  // all models share the same shader program
 
     // scene models (the spinning cubes)
-    for (const MyModel &model : m_models) {
-        MyMesh *mesh = model.mesh();
+    for (const Model &model : models) {
+        Mesh *mesh = model.getMesh();
         if (mesh == nullptr || !mesh->isValid()) {
             continue;
         }
 
-        // each model has its own model matrix -> the uniform is rewritten per model (the location is cached by MyShaderProgram)
-        m_program.setMat4("uMvp", view_projection * model.modelMatrix());
+        // each model has its own model matrix -> the uniform is rewritten per model (the location is cached by ShaderProgram)
+        program.setMat4("uMvp", view_projection * model.modelMatrix());
         mesh->draw();
     }
 
     // character placeholder model
-    if (MyMesh *mesh = m_character_model.mesh(); mesh != nullptr && mesh->isValid()) {
-        m_program.setMat4("uMvp", view_projection * m_character_model.modelMatrix());
+    if (Mesh *mesh = character_model.getMesh(); mesh != nullptr && mesh->isValid()) {
+        program.setMat4("uMvp", view_projection * character_model.modelMatrix());
         mesh->draw();
     }
 
-    m_program.release();
+    program.release();
 }

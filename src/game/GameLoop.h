@@ -47,9 +47,9 @@ public:
     void clear();
 
 private:
-    std::vector<Task> m_frame_tasks;
-    std::vector<Task> m_tick_tasks;
-    std::vector<Task> m_real_time_tasks;
+    std::vector<Task> frame_tasks;
+    std::vector<Task> tick_tasks;
+    std::vector<Task> real_time_tasks;
 };
 
 // Game main loop.
@@ -69,18 +69,18 @@ public:
     void pause();  // pause time advance (state is preserved)
     void exit();   // stop the timer and clear all tasks
 
-    GameLoopState state() const { return m_loop_state; }
-    bool isActive() const { return (m_loop_state & GameLoopFlags::EVENT_ACTIVE) != 0; }
-    std::uint64_t tickCount() const { return m_tick_count; }
+    GameLoopState getState() const { return loop_state; }
+    bool isActive() const { return (loop_state & GameLoopFlags::EVENT_ACTIVE) != 0; }
+    std::uint64_t getTickCount() const { return tick_count; }
 
-    TaskScheduler &scheduler() { return m_scheduler; }
+    TaskScheduler &getScheduler() { return scheduler; }
 
     // Frame interval in milliseconds, default 16ms ≈ 60fps
     void setFrameInterval(int milliseconds);
-    int frameInterval() const { return m_timer.interval(); }
+    int getFrameInterval() const { return timer.interval(); }
 
     // Fixed timestep of one logic tick (seconds), default 1/60. Physics/character/animation should all step by this to stay frame-rate independent
-    double fixedTickSeconds() const { return m_fixed_tick_seconds; }
+    double getFixedTickSeconds() const { return fixed_tick_seconds; }
     void setFixedTickSeconds(double seconds);
 
     // Pending queue: executed in order at the start of the current frame
@@ -93,14 +93,14 @@ signals:
 private:
     void mainLoop();  // advance one frame (private: driven by the internal timer)
 
-    GameLoopState m_loop_state = 0;
-    std::deque<Task> m_task_queue;
-    TaskScheduler m_scheduler;
-    QTimer m_timer{this};  // value member + Qt parent/child: no more raw-pointer new (that used to leak)
-    QElapsedTimer m_clock;
-    std::uint64_t m_tick_count = 0;
-    double m_tick_accumulator = 0.0;
-    double m_fixed_tick_seconds = 1.0 / 60.0;
+    GameLoopState loop_state = 0;
+    std::deque<Task> task_queue;
+    TaskScheduler scheduler;
+    QTimer timer{this};  // value member + Qt parent/child: no more raw-pointer new (that used to leak)
+    QElapsedTimer clock;
+    std::uint64_t tick_count = 0;
+    double tick_accumulator = 0.0;
+    double fixed_tick_seconds = 1.0 / 60.0;
 };
 
 #endif  // GAME_LOOP_H

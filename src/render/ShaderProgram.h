@@ -1,5 +1,5 @@
-#ifndef MY_SHADER_H
-#define MY_SHADER_H
+#ifndef SHADER_H
+#define SHADER_H
 
 #include <QOpenGLFunctions_4_3_Core>
 #include <QString>
@@ -21,7 +21,7 @@
 //
 // Shader source comes from files (either a Qt resource path such as ":/shaders/basic.vert" or a disk path);
 // resources are compiled into the exe via stv3d-lab.qrc, so no shader files need to be copied on release.
-class MyShaderProgram : protected QOpenGLFunctions_4_3_Core
+class ShaderProgram : protected QOpenGLFunctions_4_3_Core
 {
 public:
     // Explicit attribute number binding: location matches layout(location = N) in the shader
@@ -31,13 +31,13 @@ public:
         const char *name;
     };
 
-    MyShaderProgram() = default;
-    ~MyShaderProgram();
+    ShaderProgram() = default;
+    ~ShaderProgram();
 
-    MyShaderProgram(const MyShaderProgram &) = delete;
-    MyShaderProgram &operator=(const MyShaderProgram &) = delete;
-    MyShaderProgram(MyShaderProgram &&other) noexcept;
-    MyShaderProgram &operator=(MyShaderProgram &&other) noexcept;
+    ShaderProgram(const ShaderProgram &) = delete;
+    ShaderProgram &operator=(const ShaderProgram &) = delete;
+    ShaderProgram(ShaderProgram &&other) noexcept;
+    ShaderProgram &operator=(ShaderProgram &&other) noexcept;
 
     // Load from files and create (handles Qt resource paths :/... automatically)
     bool createFromFiles(const QString &vertexPath,
@@ -52,8 +52,8 @@ public:
     // Release the program (safe to call repeatedly; requires a current context)
     void destroy();
 
-    bool isValid() const { return m_program != 0; }
-    GLuint programId() const { return m_program; }
+    bool isValid() const { return program != 0; }
+    GLuint getProgramId() const { return program; }
 
     // Enable/disable the program
     void bind();
@@ -77,8 +77,8 @@ private:
     bool linkProgram(GLuint vertexShader, GLuint fragmentShader,
                      const std::vector<AttributeBinding> &attributeBindings);
 
-    GLuint m_program = 0;
-    std::unordered_map<std::string, GLint> m_uniform_cache;  // uniform name -> location
+    GLuint program = 0;
+    std::unordered_map<std::string, GLint> uniform_cache;  // uniform name -> location
 };
 
-#endif  // MY_SHADER_H
+#endif  // SHADER_H

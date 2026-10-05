@@ -59,8 +59,8 @@ int main()
 {
     // ================================ camera ================================
     {
-        MyCamera camera;
-        check(near3(camera.position(), vec3{0.0f, 0.0f, 3.0f}), "camera: default position");
+        Camera camera;
+        check(near3(camera.getPosition(), vec3{0.0f, 0.0f, 3.0f}), "camera: default position");
         check(near3(camera.forward(), vec3{0.0f, 0.0f, -1.0f}), "camera: default forward is -Z");
         check(near3(camera.right(), vec3{1.0f, 0.0f, 0.0f}), "camera: default right is +X");
         check(near3(camera.up(), vec3{0.0f, 1.0f, 0.0f}), "camera: default up is +Y");
@@ -68,7 +68,7 @@ int main()
         check(near(camera.yawDegrees(), 0.0f), "camera: default yaw is 0");
 
         const mat4 view = camera.viewMatrix();
-        check(near3(view.transformPoint(camera.position()), vec3{0.0f, 0.0f, 0.0f}),
+        check(near3(view.transformPoint(camera.getPosition()), vec3{0.0f, 0.0f, 0.0f}),
               "camera: viewMatrix maps the position to the origin");
         check(near3(view.transformPoint(vec3{0.0f, 0.0f, 0.0f}), vec3{0.0f, 0.0f, -3.0f}),
               "camera: viewMatrix maps the world origin onto -Z");
@@ -78,16 +78,16 @@ int main()
 
     // ---------- lookAt ----------
     {
-        MyCamera camera;
+        Camera camera;
         camera.setPosition(vec3{0.0f, 2.0f, 5.0f});
         camera.lookAt(vec3{0.0f, 1.6f, 0.0f});
 
-        const vec3 expected = (vec3{0.0f, 1.6f, 0.0f} - camera.position()).normalized();
+        const vec3 expected = (vec3{0.0f, 1.6f, 0.0f} - camera.getPosition()).normalized();
         check(near3(camera.forward(), expected), "camera.lookAt points forward at the target");
         check(near(camera.right().y, 0.0f, 1e-3f), "camera.lookAt produces no roll");
 
         // Degenerate case: looking straight down while `up` is +Y
-        MyCamera down;
+        Camera down;
         down.setPosition(vec3{0.0f, 5.0f, 0.0f});
         down.lookAt(vec3{0.0f, 0.0f, 0.0f});
         bool finite = std::isfinite(down.forward().x) && std::isfinite(down.forward().y)
@@ -101,34 +101,34 @@ int main()
 
     // ---------- rotation, quaternion properties ----------
     {
-        MyCamera camera;
+        Camera camera;
         camera.rotateWorld(90.0f, vec3{0.0f, 1.0f, 0.0f});
         check(near3(camera.forward(), vec3{-1.0f, 0.0f, 0.0f}, 1e-3f),
               "camera.rotateWorld(+90 deg about Y) turns forward to -X");
         check(near(camera.yawDegrees(), 90.0f, 0.1f), "camera: yaw reads back 90 degrees");
         check(near3(camera.up(), vec3{0.0f, 1.0f, 0.0f}), "camera: pure yaw leaves up unchanged");
 
-        MyCamera pitch;
+        Camera pitch;
         pitch.rotateLocal(90.0f, vec3{1.0f, 0.0f, 0.0f});
         check(near3(pitch.forward(), vec3{0.0f, 1.0f, 0.0f}, 1e-3f),
               "camera.rotateLocal(+90 deg about X) looks straight up");
         check(near(pitch.pitchDegrees(), 90.0f, 0.1f), "camera: pitch reads back 90 degrees");
 
-        MyCamera clamped;
+        Camera clamped;
         clamped.yawPitch(0.0f, 1000.0f);
         check(near(clamped.pitchDegrees(), 85.0f, 0.5f), "camera.yawPitch clamps pitch at +85");
         clamped.yawPitch(0.0f, -2000.0f);
         check(near(clamped.pitchDegrees(), -85.0f, 0.5f), "camera.yawPitch clamps pitch at -85");
 
         // A long random sequence must not introduce roll or denormalize the quaternion
-        MyCamera spin;
+        Camera spin;
         std::srand(1234);
         for (int i = 0; i < 500; ++i)
         {
             spin.yawPitch(static_cast<float>(std::rand() % 720 - 360),
                           static_cast<float>(std::rand() % 200 - 100));
         }
-        check(near(spin.orientation().length(), 1.0f, 1e-4f),
+        check(near(spin.getOrientation().length(), 1.0f, 1e-4f),
               "camera: orientation stays a unit quaternion after 500 rotations");
         check(near(spin.right().y, 0.0f, 1e-3f), "camera: no roll accumulates (right stays level)");
         check(near(spin.forward().dot(spin.right()), 0.0f) && near(spin.forward().dot(spin.up()), 0.0f)
@@ -138,20 +138,20 @@ int main()
 
     // ---------- movement ----------
     {
-        MyCamera camera;
+        Camera camera;
         camera.moveLocal(1.0f, 0.0f, 0.0f);
-        check(near3(camera.position(), vec3{0.0f, 0.0f, 2.0f}), "camera.moveLocal moves forward");
+        check(near3(camera.getPosition(), vec3{0.0f, 0.0f, 2.0f}), "camera.moveLocal moves forward");
         camera.moveLocal(0.0f, 2.0f, 0.0f);
-        check(near3(camera.position(), vec3{2.0f, 0.0f, 2.0f}), "camera.moveLocal strafes right");
+        check(near3(camera.getPosition(), vec3{2.0f, 0.0f, 2.0f}), "camera.moveLocal strafes right");
         camera.moveLocal(0.0f, 0.0f, 1.5f);
-        check(near3(camera.position(), vec3{2.0f, 1.5f, 2.0f}), "camera.moveLocal rises");
+        check(near3(camera.getPosition(), vec3{2.0f, 1.5f, 2.0f}), "camera.moveLocal rises");
         camera.move(vec3{1.0f, 0.0f, 0.0f});
-        check(near3(camera.position(), vec3{3.0f, 1.5f, 2.0f}), "camera.move translates in world space");
+        check(near3(camera.getPosition(), vec3{3.0f, 1.5f, 2.0f}), "camera.move translates in world space");
     }
 
     // ---------- projection: OpenGL vs Vulkan clip conventions ----------
     {
-        MyCamera camera;
+        Camera camera;
         camera.setPerspective(90.0f, 0.1f, 100.0f);
         camera.setViewportAspect(2.0f);
 
@@ -171,14 +171,14 @@ int main()
         check(vk.m[5] < 0.0f && gl.m[5] > 0.0f, "camera: flipY negates the Y scale only");
 
         camera.setViewportAspect(0.0f);
-        check(near(camera.aspect(), 1.0f), "camera: an invalid aspect is clamped to 1");
+        check(near(camera.getAspect(), 1.0f), "camera: an invalid aspect is clamped to 1");
         camera.setPerspective(300.0f, 0.1f, 100.0f);
-        check(near(camera.fovYDegrees(), 179.0f), "camera: an invalid fov is clamped to 179");
+        check(near(camera.getFovYDegrees(), 179.0f), "camera: an invalid fov is clamped to 179");
     }
 
     // ================================= model ================================
     {
-        MyModel model;
+        Model model;
         check(!model.hasMesh(), "model: no mesh by default");
         check(nearMat4(model.modelMatrix(), mat4{}), "model: default model matrix is the identity");
 
@@ -186,9 +186,9 @@ int main()
         check(near3(model.modelMatrix().transformPoint(vec3{0.0f, 0.0f, 0.0f}), vec3{3.0f, -2.0f, 5.0f}),
               "model: the local origin maps onto the position");
         model.translate(vec3{1.0f, 1.0f, 1.0f});
-        check(near3(model.position(), vec3{4.0f, -1.0f, 6.0f}), "model: translate accumulates");
+        check(near3(model.getPosition(), vec3{4.0f, -1.0f, 6.0f}), "model: translate accumulates");
 
-        MyModel trs;
+        Model trs;
         trs.setPosition(vec3{1.0f, 0.0f, 0.0f});
         trs.setRotationDegrees(90.0f, vec3{0.0f, 1.0f, 0.0f});
         trs.setUniformScale(2.0f);
@@ -196,10 +196,10 @@ int main()
         check(near3(trs.modelMatrix().transformPoint(vec3{1.0f, 0.0f, 0.0f}), vec3{1.0f, 0.0f, -2.0f}),
               "model: the transform order is S -> R -> T");
         check(nearMat4(trs.modelMatrix(),
-                       mat4::fromTRS(trs.position(), trs.rotation(), trs.scale())),
+                       mat4::fromTRS(trs.getPosition(), trs.getRotation(), trs.getScale())),
               "model: modelMatrix equals mat4::fromTRS");
 
-        MyModel spin;
+        Model spin;
         spin.setSpin(90.0f, vec3{0.0f, 1.0f, 0.0f});
         spin.updateSpin(1.0f);
         check(near3(spin.modelMatrix().transformDirection(vec3{1.0f, 0.0f, 0.0f}),
@@ -209,7 +209,7 @@ int main()
         const vec3 half_turn = spin.modelMatrix().transformDirection(vec3{1.0f, 0.0f, 0.0f});
         check(near3(half_turn, vec3{-0.7071f, 0.0f, -0.7071f}), "model: spin keeps accumulating");
 
-        MyModel still;
+        Model still;
         still.setSpin(0.0f, vec3{0.0f, 1.0f, 0.0f});
         still.updateSpin(5.0f);
         check(near3(still.modelMatrix().transformDirection(vec3{1.0f, 0.0f, 0.0f}), vec3{1.0f, 0.0f, 0.0f}),
@@ -221,9 +221,9 @@ int main()
 
     // ========================== character controller =======================
     {
-        MyCamera camera;
-        MyCharacterController controller;
-        MyCharacterController::InputState input;
+        Camera camera;
+        CharacterController controller;
+        CharacterController::InputState input;
 
         input.forward = true;
         controller.setInput(input);
@@ -244,16 +244,16 @@ int main()
         input.right = false;
         input.sprint = true;
         controller.setInput(input);
-        check(near(controller.currentSpeed(), controller.speeds().sprint),
+        check(near(controller.currentSpeed(), controller.getSpeeds().sprint),
               "controller: sprint raises the target speed");
 
         vec3 position{0.0f, 0.0f, 0.0f};
         controller.update(position, camera, 0.5f);
-        check(near3(position, vec3{0.0f, 0.0f, -1.0f} * (controller.speeds().sprint * 0.5f)),
+        check(near3(position, vec3{0.0f, 0.0f, -1.0f} * (controller.getSpeeds().sprint * 0.5f)),
               "controller: update moves by speed * dt");
 
         // Looking down must not make the character fly
-        MyCamera looking_down;
+        Camera looking_down;
         looking_down.setPosition(vec3{0.0f, 3.0f, 3.0f});
         looking_down.lookAt(vec3{0.0f, 0.0f, 0.0f});
         input.sprint = false;
@@ -264,77 +264,77 @@ int main()
 
     // ============================== character ==============================
     {
-        MyCharacter character;
-        check(character.view() == CameraView::TPV, "character: default view is TPV");
-        check(near3(character.camera().position(), character.position() + character.cameraOffset()),
+        Character character;
+        check(character.getView() == CameraView::TPV, "character: default view is TPV");
+        check(near3(character.getCamera().getPosition(), character.getPosition() + character.getCameraOffset()),
               "character: TPV camera sits at position + offset");
-        check(near3(character.camera().forward(),
-                    (character.position() + vec3{0.0f, 1.6f, 0.0f} - character.camera().position()).normalized()),
+        check(near3(character.getCamera().forward(),
+                    (character.getPosition() + vec3{0.0f, 1.6f, 0.0f} - character.getCamera().getPosition()).normalized()),
               "character: TPV camera looks at the character");
 
         // FPV keeps the player's orientation
-        character.camera().yawPitch(35.0f, -12.0f);
-        const quat before = character.camera().orientation();
+        character.getCamera().yawPitch(35.0f, -12.0f);
+        const quat before = character.getCamera().getOrientation();
         character.setView(CameraView::FPV);
-        check(near3(character.camera().position(),
-                    character.position() + vec3{0.0f, character.eyeHeight(), 0.0f}),
+        check(near3(character.getCamera().getPosition(),
+                    character.getPosition() + vec3{0.0f, character.getEyeHeight(), 0.0f}),
               "character: FPV camera sits at eye height");
-        check(near(character.camera().orientation().dot(before), 1.0f, 1e-4f),
+        check(near(character.getCamera().getOrientation().dot(before), 1.0f, 1e-4f),
               "character: syncCamera does not overwrite the FPV orientation");
 
         // Walk forward and check that the camera follows
-        MyCharacterController::InputState input;
+        CharacterController::InputState input;
         input.forward = true;
-        character.controller().setInput(input);
-        const vec3 heading = character.camera().forward();
+        character.getController().setInput(input);
+        const vec3 heading = character.getCamera().forward();
         character.update(1.0f);
         const vec3 expected_dir = vec3{heading.x, 0.0f, heading.z}.normalized();
-        check(near3(character.position(), expected_dir * character.controller().currentSpeed()),
+        check(near3(character.getPosition(), expected_dir * character.getController().currentSpeed()),
               "character: FPV walking follows the camera heading");
-        check(near3(character.camera().position(),
-                    character.position() + vec3{0.0f, character.eyeHeight(), 0.0f}),
+        check(near3(character.getCamera().getPosition(),
+                    character.getPosition() + vec3{0.0f, character.getEyeHeight(), 0.0f}),
               "character: the FPV camera keeps following");
 
         // Back to TPV: the orbit offset survives and the camera looks at the character again
         character.setView(CameraView::TPV);
-        check(near3(character.camera().position(), character.position() + character.cameraOffset()),
+        check(near3(character.getCamera().getPosition(), character.getPosition() + character.getCameraOffset()),
               "character: switching back to TPV restores the orbit placement");
-        check(near3(character.camera().forward(),
-                    (character.position() + vec3{0.0f, 1.6f, 0.0f} - character.camera().position()).normalized()),
+        check(near3(character.getCamera().forward(),
+                    (character.getPosition() + vec3{0.0f, 1.6f, 0.0f} - character.getCamera().getPosition()).normalized()),
               "character: TPV looks at the character again");
     }
 
     // ---------- TPV orbit limits and zoom ----------
     {
-        MyCharacter character;
+        Character character;
         const float radius = character.cameraDistance();
         character.orbitCamera(90.0f, 0.0f);
         check(near(character.cameraDistance(), radius), "orbit: the radius is preserved");
-        check(near(character.camera().position().y - character.position().y, 2.0f),
+        check(near(character.getCamera().getPosition().y - character.getPosition().y, 2.0f),
               "orbit: a horizontal orbit keeps the height");
 
-        MyCharacter dive;
+        Character dive;
         for (int i = 0; i < 50; ++i)
         {
             dive.orbitCamera(0.0f, -10.0f);
         }
-        const vec3 dive_offset = dive.cameraOffset();
+        const vec3 dive_offset = dive.getCameraOffset();
         const float dive_pitch = std::atan2(dive_offset.y, std::hypot(dive_offset.x, dive_offset.z)) * 180.0f / kPi;
         check(near(dive_pitch, -89.0f, 0.5f), "orbit: the downward pitch stops at -89 degrees");
         check(std::hypot(dive_offset.x, dive_offset.z) > 0.01f,
               "orbit: the offset keeps a horizontal part so lookAt cannot degenerate");
 
-        MyCharacter rise;
+        Character rise;
         for (int i = 0; i < 50; ++i)
         {
             rise.orbitCamera(0.0f, 10.0f);
         }
-        const vec3 rise_offset = rise.cameraOffset();
+        const vec3 rise_offset = rise.getCameraOffset();
         const float rise_pitch = std::atan2(rise_offset.y, std::hypot(rise_offset.x, rise_offset.z)) * 180.0f / kPi;
         check(near(rise_pitch, 89.0f, 0.5f), "orbit: the upward pitch stops at +89 degrees");
         check(rise_offset.y > 0.0f, "orbit: the camera ends up above the character");
 
-        MyCharacter zoom;
+        Character zoom;
         zoom.setCameraDistance(2.0f);
         check(near(zoom.cameraDistance(), 2.0f), "zoom: setCameraDistance takes effect");
         zoom.setCameraDistance(0.0f);

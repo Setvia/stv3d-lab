@@ -59,14 +59,14 @@ stv3d-lab/
 │   │   └─ log/                LogManager（目前仍用 Qt，下一步搬到 platform/qt）
 │   ├─ engine → 见下（物理位置仍在 src/game/）
 │   ├─ game/                   场景与交互
-│   │   ├─ Camera.h            MyCamera：位置 + 四元数朝向 + 投影（★ 已用 core 数学）
-│   │   ├─ Model.h             MyModel：网格引用 + 变换 + 自转（★ 已用 core 数学）
-│   │   ├─ Character.h/.cpp    MyCharacter(Controller)：位置 + 控制器 + FPV/TPV（★ 已用 core 数学）
-│   │   ├─ 3d.h/.cpp           MyGLWidget：GL 资源装配 + 输入 + 场景 + 渲染队列（Qt 边界）
+│   │   ├─ Camera.h            Camera：位置 + 四元数朝向 + 投影（★ 已用 core 数学）
+│   │   ├─ Model.h             Model：网格引用 + 变换 + 自转（★ 已用 core 数学）
+│   │   ├─ Character.h/.cpp    Character(Controller)：位置 + 控制器 + FPV/TPV（★ 已用 core 数学）
+│   │   ├─ 3d.h/.cpp           GLWidget：GL 资源装配 + 输入 + 场景 + 渲染队列（Qt 边界）
 │   │   └─ GameLoop.h/.cpp     GameLoop：固定步长逻辑刻 + 每帧回调 + 任务调度（Qt 边界）
 │   ├─ render/                 GPU 侧（当前是 OpenGL 后端）
-│   │   ├─ Mesh.h/.cpp         MyMesh：VAO/VBO/EBO + 显式属性绑定
-│   │   ├─ ShaderProgram.h/.cpp MyShaderProgram：编译/链接/uniform 位置缓存（uniform 收 core 类型）
+│   │   ├─ Mesh.h/.cpp         Mesh：VAO/VBO/EBO + 显式属性绑定
+│   │   ├─ ShaderProgram.h/.cpp ShaderProgram：编译/链接/uniform 位置缓存（uniform 收 core 类型）
 │   │   └─ resources/          （占位）BufferObject / MeshResource / TextureResource
 │   ├─ physics/                （占位）Collider / RigidBody / PhysicsWorld
 │   ├─ loader/                 （占位）FBXLoader / GLTFLoader
@@ -94,14 +94,14 @@ stv3d_engine_tests tests/engine_test.cpp         ← 只链 stv3d_engine
 
 ```
 stv3d-lab (exe)
- ├─ MyLogManager            基础设施：日志（静态工具类）
- └─ MyGLWidget              视图 + 输入 + 场景装配；每帧遍历模型绘制
+ ├─ LogManager               基础设施：日志（静态工具类）
+ └─ GLWidget                 视图 + 输入 + 场景装配；每帧遍历模型绘制
       ├─ GameLoop / TaskScheduler   时间：固定步长逻辑刻 + 每帧回调
-      └─ MyCharacter                角色：位置、控制器、摄像机（FPV/TPV 摆放）   ← stv3d_engine
-           ├─ MyCharacterController 输入意图 → 世界位移
-           └─ MyCamera              位置 + 四元数朝向 + 投影矩阵
-      └─ MyModel → MyMesh           场景对象：变换 / 几何（下游是 GPU 资源）
-      └─ MyShaderProgram            着色器：编译链接 + uniform 缓存（源码来自 qrc）
+      └─ Character                  角色：位置、控制器、摄像机（FPV/TPV 摆放）   ← stv3d_engine
+           ├─ CharacterController   输入意图 → 世界位移
+           └─ Camera                位置 + 四元数朝向 + 投影矩阵
+      └─ Model → Mesh               场景对象：变换 / 几何（下游是 GPU 资源）
+      └─ ShaderProgram              着色器：编译链接 + uniform 缓存（源码来自 qrc）
 ```
 
 ### 分层是被"编译期"强制的，不靠自觉
@@ -127,56 +127,67 @@ stv3d-lab (exe)
 
 ## 5. 各类职责与关键接口
 
-### `MyGLWidget`（src/game/3d.h/.cpp）
+### `GLWidget`（src/game/3d.h/.cpp）
 视图层。持有网格库、模型列表、角色、着色器程序与主循环；把输入翻译成对角色/摄像机的操作。
 
-- 人称：`enum class CameraView { FPV, TPV }`（定义在 src/game/Camera.h），`setCameraView()` / `cameraView()`
-- 摄像机访问：`camera()`（就是角色身上那台）、`setCamera(eye, target, up)`、`resetCamera()`
-- 角色/循环：`character()`、`gameLoop()`（可 `gameLoop().enqueue(task)` 或 `scheduler().addTickTask(...)`）
-- 输入注入（便于脚本/测试）：`setCameraInput(CameraInput)`
+- 人称：`enum class CameraView { FPV, TPV }`（定义在 src/game/Camera.h），`setCameraView()` / `getCameraView()`
+- 摄像机访问：`getCamera()`（就是角色身上那台）、`setCamera(eye, target, up)`、`resetCamera()`
+- 角色 / 循环 / 模型：`getCharacter()`、`getGameLoop()`（可 `getGameLoop().enqueue(task)` 或
+  `getGameLoop().getScheduler().addTickTask(...)`）、`getModels()`、`meshCount()`
+- 输入注入（便于脚本/测试）：`setCameraInput(CameraInput)` / `getCameraInput()`、
+  移动速度 `setMoveSpeed()` / `getMoveSpeed()`
 - 生命周期：`initializeGL()` 建资源、`resizeGL()` 更新纵横比、`paintGL()` 遍历模型绘制；析构里
   `makeCurrent() → releaseGlResources() → doneCurrent()`
 
-### `MyCamera`（src/game/Camera.h → 属于 `stv3d_engine`，无 Qt）
+### `Camera`（src/game/Camera.h → 属于 `stv3d_engine`，无 Qt）
 状态只有 **位置 + 单位四元数 + 透视参数**，全部用 core 类型（`vec3` / `quat` / `mat4`）。
 
 | 分类 | 接口 |
 |---|---|
-| 位置 | `setPosition` / `position` / `move(worldDelta)` / `moveLocal(f,r,u)` |
-| 朝向 | `setOrientation` / `orientation` / `lookAt(target, worldUp)`（内部换算成四元数，不保存 target/up） |
+| 位置 | `setPosition` / `getPosition()` / `move(worldDelta)` / `moveLocal(f,r,u)` |
+| 朝向 | `setOrientation` / `getOrientation()` / `lookAt(target, worldUp)`（内部换算成四元数，不保存 target/up） |
 | 旋转 | `rotateWorld(deg, axis)`（前乘，世界系）、`rotateLocal(deg, axis)`（后乘，局部系）、`yawPitch(yaw, pitch, min, max)` |
 | 派生轴 | `forward()` / `right()` / `up()`（由四元数现算，永远正交）、`pitchDegrees()` / `yawDegrees()` |
 | 矩阵 | `viewMatrix()`（四元数共轭 + 反向平移，现算）、`projectionMatrix()` |
-| 透视 | `setPerspective(fovY, near, far)`（fov 钳制 1°~179°）、`setViewportAspect(aspect)`（非法值钳制为 1） |
+| 透视 | `setPerspective(fovY, near, far)`（fov 钳制 1°~179°）、`setViewportAspect(aspect)`（非法值钳制为 1）、`getFovYDegrees()` / `getAspect()` / `getNearPlane()` / `getFarPlane()` |
 | 裁剪空间 | `setClipDepth(ClipDepth::NegativeOneToOne \| ZeroToOne)`、`setFlipY(bool)` —— **GL 与 Vulkan 的差异是参数**，不是硬编码 |
 
 设计要点：偏航只绕世界 Y、俯仰只绕自身 X ⇒ **滚转恒为 0、无万向锁**；俯仰限位靠"钳制目标俯仰角、
 只转差值"实现，**全程不保存欧拉角**；`moveLocal` 因此也不需要任何退化保护。
 
-### `MyCharacter` / `MyCharacterController`（src/game/Character.h/.cpp → `stv3d_engine`，无 Qt）
+> `near` / `far` 是 `<windows.h>`（经 Qt 带进来）里的**宏**，所以成员变量叫
+> `near_plane` / `far_plane`，不能用裸名 `near` / `far`。
+
+### `Character` / `CharacterController`（src/game/Character.h/.cpp → `stv3d_engine`，无 Qt）
 - 控制器：`InputState{forward,backward,left,right,jump,sprint}` + `Speeds{walk=5, sprint=9}`（m/s）；
   `movementDirection(camera)` 取视线**水平投影**（抬头低头不会让角色飞起来）并归一化；
-  `update(vec3& position, camera, dt)` 显式传入位置引用（控制器自身不藏位置状态）
-- 角色：`update(dt)`（推进 + 摆摄像机）、`syncCamera()`、`position/setPosition`、`camera()`、`controller()`
-- 人称：`setView(CameraView)`；FPV 相机在 `position + (0, eyeHeight=1.6, 0)`，**朝向由玩家控制、syncCamera 不覆盖**；
-  TPV 相机在 `position + offset(0,2,5)`，`lookAt` 角色头部（`m_camera_target_height = 1.6`）
+  `update(vec3& position, camera, dt)` 显式传入位置引用（控制器自身不藏位置状态）；
+  访问器 `getInput()` / `setInput()`、`getSpeeds()` / `setSpeeds()`、`currentSpeed()`
+- 角色：`update(dt)`（推进 + 摆摄像机）、`syncCamera()`、`getPosition()` / `setPosition()`、
+  `getCamera()`、`getController()`
+- 人称：`setView(CameraView)` / `getView()`；FPV 相机在 `position + (0, eyeHeight=1.6, 0)`，
+  **朝向由玩家控制、syncCamera 不覆盖**；TPV 相机在 `position + offset(0,2,5)`，
+  `lookAt` 角色头部（`camera_target_height = 1.6`）
 - TPV 轨道：`orbitCamera(yaw, pitch)`（四元数旋转偏移向量，俯仰限位 `[-89°, 89°]`，见 `Character.cpp` 常量）、
-  `setCameraDistance()`（钳制 0.5~100 m）
+  `setCameraDistance()`（钳制 0.5~100 m）、`getCameraOffset()` / `cameraDistance()`
 
-### `MyMesh` / `MyMeshFactory`（src/render/Mesh.h/.cpp）
-- `struct MyVertex { float position[3]; float color[3]; }`（POD，用 `offsetof` 给出属性偏移）
-- `MyMesh`：RAII、**禁拷贝、可移动**；`create(vertices, indices)` / `destroy()` / `draw()` / `isValid()`
+### `Mesh` / `MeshFactory`（src/render/Mesh.h/.cpp）
+- `struct Vertex { float position[3]; float color[3]; }`（POD，用 `offsetof` 给出属性偏移）
+- `Mesh`：RAII、**禁拷贝、可移动**；`create(vertices, indices)` / `destroy()` / `draw()` /
+  `isValid()` / `getIndexCount()` / `vertexStride()`
 - 属性号常量：`kAttribPos = 0`、`kAttribColor = 1`、`kBindingInterleaved = 0`（与 shader 的 `layout(location=N)` 对应）
-- `MyMeshFactory::makeCube(vertices, indices, size)`：边长可配的立方体（8 顶点 / 36 索引）
+- `MeshFactory::makeCube(vertices, indices, size)`：边长可配的立方体（8 顶点 / 36 索引）
 - 兼容性保护：没有当前 GL 上下文时 `create()` 直接返回并告警（Qt 内部会在空上下文崩溃）
 
-### `MyModel`（src/game/Model.h → `stv3d_engine`，无 Qt）
-- 引用几何：`std::shared_ptr<MyMesh>`（多个模型共享一份 VBO/VAO；`MyMesh` 只在 render 层，这里只用前置声明）
-- 变换：`setPosition/translate`（`vec3`）、`setRotation(quat)/rotateBy`、`setScale/setUniformScale`
-- 自转：`setSpin(degPerSec, axis)` + `updateSpin(dt)`
+### `Model`（src/game/Model.h → `stv3d_engine`，无 Qt）
+- 引用几何：`std::shared_ptr<Mesh>`（多个模型共享一份 VBO/VAO；`Mesh` 只在 render 层，这里只用前置声明）
+- 变换：`setPosition` / `getPosition()` / `translate`（`vec3`）、`setRotation(quat)` / `getRotation()` /
+  `setRotationDegrees(deg, axis)` / `rotateBy`、`setScale` / `setUniformScale` / `getScale()`
+- 自转：`setSpin(degPerSec, axis)` + `updateSpin(dt)`，读回用 `getSpinDegreesPerSecond()` / `getSpinAxis()`
+- 网格引用：`getMesh()`（可写指针）/ `getMeshPtr()`（共享所有权）/ `hasMesh()` / `setMesh()`
 - `modelMatrix()`：`mat4::fromTRS(...)`，顺序固定 **缩放 → 旋转 → 平移**
 
-### `MyShaderProgram`（src/render/ShaderProgram.h/.cpp）
+### `ShaderProgram`（src/render/ShaderProgram.h/.cpp）
 - `createFromFiles(vertPath, fragPath, attributeBindings)`（支持 `:/...` 资源路径）、`createFromSource(...)`
 - `bind()/release()`、`uniformLocation(name)`（查一次后缓存）、`setMat4(const mat4&)/setVec3(const vec3&)/setFloat`
   —— uniform 接口收 **core 类型**，所以上层（engine）不需要知道背后是哪个图形 API
@@ -184,16 +195,19 @@ stv3d-lab (exe)
 - 同样：禁拷贝可移动、无上下文时优雅失败
 
 ### `GameLoop` / `TaskScheduler`（src/game/GameLoop.h/.cpp）
-- `init()/start()/pause()/exit()`、`isActive()`、`state()`（位标志 `GameLoopFlags`）、`tickCount()`
-- 固定步长：`fixedTickSeconds()`（默认 1/60）、`setFixedTickSeconds()`；帧间隔 `setFrameInterval(ms)`（默认 16）
+- `init()/start()/pause()/exit()`、`isActive()`、`getState()`（位标志 `GameLoopFlags`）、`getTickCount()`
+- 固定步长：`getFixedTickSeconds()`（默认 1/60）、`setFixedTickSeconds()`；帧间隔 `setFrameInterval(ms)` / `getFrameInterval()`（默认 16）
 - 信号：`ticked(tickCount)`（每次逻辑刻）、`frameStepped(dt)`（每帧）
 - 累加器最多补 5 个逻辑刻（防"死亡螺旋"）；`enqueue(task)` 的待办在当前帧开头执行
 - **不使用 `while` 阻塞循环**：Qt 事件循环必须持续运行，阻塞会把界面冻死
 - `mainLoop()` 是私有单帧推进，由内部 `QTimer` 驱动
 
-### `MyLogManager`（src/core/log/LogManager.h/.cpp）
+### `LogManager`（src/core/log/LogManager.h/.cpp）
 > 位置在 `core/` 但实现用了 Qt（`QFile/QString/QDateTime/QMutex`）——它是唯一"名不副实"的文件。
 > 下一步把它拆成 `core` 的 `ILogSink` 接口 + `platform/qt` 的实现（或直接用 `std::ofstream` 实现，连 Qt 都不需要）。
+
+- `init()` / `shutdown()` / `logFilePath()` / `isReady()`；日志格式 `时间戳 [级别] 内容`
+- 文件对象藏在 `.cpp` 内、`QMutex` 保护（多线程安全）；`QtFatalMsg` 触发 `abort()`
 
 ### `core` 数学层（src/core/math/，零依赖）
 
@@ -207,26 +221,24 @@ stv3d-lab (exe)
 
 ### `core` 几何层（src/core/geometry/，零依赖）
 `Vertex{pos,norm,uv}`、`Triangle`、**`MeshData{vertices, indices}`**（纯 CPU 数据，不含任何 GPU 句柄——GPU 句柄属于 `src/render/`），以及 `generator/` 下的几何生成器占位。
-- `init()` / `shutdown()` / `logFilePath()` / `isReady()`；日志格式 `时间戳 [级别] 内容`
-- 文件对象藏在 `.cpp` 内、`QMutex` 保护（多线程安全）；`QtFatalMsg` 触发 `abort()`
 
 ## 6. 每帧数据流
 
 ```
 GameLoop（QTimer 16ms）
  │
- ├─ 累加器按 1/60 推进 N 次 ── emit ticked ──► MyGLWidget::onGameTick()
- │                                              ├─ 每个 MyModel::updateSpin(fixedDt)
+ ├─ 累加器按 1/60 推进 N 次 ── emit ticked ──► GLWidget::onGameTick()
+ │                                              ├─ 每个 Model::updateSpin(fixedDt)
  │                                              └─ updateCharacter(fixedDt)
- │                                                   键盘 → MyCharacterController::InputState
- │                                                        → MyCharacter::update(fixedDt)
+ │                                                   键盘 → CharacterController::InputState
+ │                                                        → Character::update(fixedDt)
  │                                                        → 位移 + syncCamera()（按 FPV/TPV 摆放）
  │
  └─ emit frameStepped ──► onGameFrame() ──► update() ──► paintGL()
-                                                          ├─ camera = m_character.camera()
+                                                          ├─ camera = character.getCamera()
                                                           ├─ VP = projectionMatrix() × viewMatrix()
                                                           └─ 对每个模型：
-                                                               m_program.setMat4("uMvp", VP × modelMatrix())
+                                                               program.setMat4("uMvp", VP × modelMatrix())
                                                                mesh->draw()   // 显式重放绑定 + glDrawElements
 ```
 
@@ -261,12 +273,17 @@ GameLoop（QTimer 16ms）
 2. **core / engine 不得依赖 Qt/GL**：`src/core/**` 与 `src/game/{Camera.h,Model.h,Character.*}` 里出现 `<Q...>` / `<GL...>` 就是分层破坏（编译期分别由 `stv3d_core` / `stv3d_engine` 目标挡住）
 3. **数学约定只认 `core/math/conventions.h`**：列主序、弧度、右手系、`T*R*S`、四元数 `{w,x,y,z}`；GL 与 Vulkan 的裁剪空间差异用 `ClipDepth` 参数表达，不要烤进 core
 4. **GL 资源生命周期**：只在上下文有效时创建/销毁（`initializeGL()` / `makeCurrent()` 之后）
-5. **GL 句柄类**：RAII、禁拷贝、可移动（`MyMesh` / `MyShaderProgram`）
+5. **GL 句柄类**：RAII、禁拷贝、可移动（`Mesh` / `ShaderProgram`）
 6. **顶点属性显式三步**：`glVertexAttribFormat` → `glVertexAttribBinding` → `glBindVertexBuffer`
 7. **朝向用四元数**：不引入欧拉角状态；需要限位就"钳制目标角、只转差值"
 8. **着色器是真实文件**：改完要重新构建（qrc 是编译期嵌入）；临时想热改可把 `createFromFiles` 换成磁盘路径
 9. **逻辑按固定步长、渲染按帧**：任何随时间变化的量都用 `dt`，不要绑帧率
-10. **纯数学类不碰 GL**：`MyCamera` / `MyModel` / core 数学可以在没有窗口的进程里单测
+10. **纯数学类不碰 GL**：`Camera` / `Model` / core 数学可以在没有窗口的进程里单测
+11. **命名**：成员变量一律**裸名**（不加 `m_` 前缀）；读一个已存成员的访问器写 `getXxx()`（`getPosition()`、
+    `getCamera()`、`getMeshPtr()`、`getIndexCount()`），现场算出来的派生量不带 `get`（`forward()`、
+    `viewMatrix()`、`cameraDistance()`、`meshCount()`），判定用 `isXxx()` / `hasXxx()`。
+    写成员的 setter 用 `setXxx()`，与成员同名时内部显式写 `this->x = x`
+12. **类名不带 `My` 前缀**：`Camera` / `Model` / `Character` / `Mesh` / `ShaderProgram` / `GLWidget` / `LogManager`
 
 ## 10. 测试
 
@@ -282,23 +299,22 @@ ctest --test-dir build            # 或直接跑 build\stv3d_core_tests.exe / st
 | `tests/core_math_test.cpp` | 列主序布局与 `at/column/translation`、乘法与结合、`fromTRS` 的 S→R→T、`lookAt`（含视线与 up 平行退化）、透视投影 **GL[-1,1] 与 Vulkan[0,1]+flipY 两套**、`ortho` 两套、四元数（轴角/复合顺序/共轭/归一化/fromTo/slerp/`fromMat3`↔`toMat3` 一致性）、mat3 逆与行列式、mat4 行列式与逆（含奇异→单位阵） | 67 |
 | `tests/engine_test.cpp` | 摄像机（默认机位、viewMatrix 映射、lookAt、世界/局部旋转、俯仰限位、500 次随机旋转后仍无滚转且正交、moveLocal、**GL/Vulkan 两套投影 + flipY**、fov/aspect 钳制）、模型（S→R→T、`fromTRS` 等价、四元数累积、自转积分、负 dt 不推进）、角色控制器（方向/归一化/疾跑/俯视不出水平面）、角色（TPV 摆放与注视、FPV 眼睛高度与朝向不被覆盖、切模式、轨道限位 ±89°、距离钳制 0.5/100） | 67 |
 
-### 上层（历史遗留，放在相邻目录 `../qtcheck/`，直接 g++ 编译）
+### 迁移前的旧测试（已删除，覆盖面对照）
 
-> 这三套是迁移前的版本，被测代码现已迁到 `tests/engine_test.cpp`（无 Qt）。
-> 它们仍可编译运行（用来对照新旧实现），但**不再是主要验证手段**。
+> `camera_test.cpp` / `model_test.cpp` / `shader_test.cpp` 曾放在相邻目录 `../qtcheck/`，它们 `#include`
+> 的是**旧头文件名**（`myCamera.h` / `myCharacter.h` / `myMesh.h` / `myModel.h` / `myShader.h`），
+> 而这些文件早已不存在（现在叫 `src/game/Camera.h` 等），`shader_test.cpp` 里还硬编码着旧项目路径
+> `D:/SetviaHarness/CProj/qtds` —— 也就是说它们早就编不过了，属于死文件，**已删除**（连同 `.exe`）。
+> 它们当年的覆盖面现在是这样的：
 
-| `camera_test.cpp` | 四元数朝向性质（单位长度/无滚转/正交/限位）、lookAt、moveLocal、FPV/TPV 摆放与切换、轨道限位与距离钳制 | 61 |
-| `model_test.cpp` | 模型矩阵顺序 S→R→T、四元数累积、自转积分、网格共享与引用计数 | 24 |
-| `shader_test.cpp` | 着色器文件读取、缺失文件错误路径、无上下文时优雅失败 | 15 |
+| 旧文件（已删） | 旧覆盖（当时 61 / 24 / 15 项） | 现在在哪 |
+|---|---|---|
+| `qtcheck/camera_test.cpp` | 四元数朝向性质（单位长度/无滚转/正交/限位）、lookAt、moveLocal、FPV/TPV 摆放与切换、轨道限位与距离钳制 | `tests/engine_test.cpp` |
+| `qtcheck/model_test.cpp` | 模型矩阵顺序 S→R→T、四元数累积、自转积分、网格共享与引用计数 | `tests/engine_test.cpp` |
+| `qtcheck/shader_test.cpp` | 着色器文件读取、缺失文件错误路径、无上下文时优雅失败 | 暂无（需要 GL 上下文，属于 render 层） |
 
-```powershell
-cd ..\qtcheck
-$q='D:/Qt/6.9.3/mingw_64'
-$src='../stv3d-lab/src'
-g++ -std=c++17 camera_test.cpp  $src/game/Character.cpp   -o camera_test.exe  -I$src -I"$q/include" -I"$q/include/QtCore" -I"$q/include/QtGui" -L"$q/lib" -lQt6Gui -lQt6Core
-g++ -std=c++17 model_test.cpp   $src/render/Mesh.cpp      -o model_test.exe   -I$src -I"$q/include" -I"$q/include/QtCore" -I"$q/include/QtGui" -I"$q/include/QtOpenGL" -L"$q/lib" -lQt6Gui -lQt6Core -lQt6OpenGL
-g++ -std=c++17 shader_test.cpp  $src/render/ShaderProgram.cpp -o shader_test.exe -I$src -I"$q/include" -I"$q/include/QtCore" -I"$q/include/QtGui" -I"$q/include/QtOpenGL" -L"$q/lib" -lQt6Gui -lQt6Core -lQt6OpenGL
-```
+> `qtcheck/` 里剩下的都是更早的探针程序（`main.cpp`、`glprobe.cpp`、`jsoncheck.cpp`、`math_debug.cpp`、
+> `jsonprobe*/`）与它们的 `build-*` 目录，属于历史调试产物，不参与现在的构建。
 
 ## 11. 已知边界 / TODO
 
@@ -309,7 +325,7 @@ g++ -std=c++17 shader_test.cpp  $src/render/ShaderProgram.cpp -o shader_test.exe
 | 1 | **修树 + 分层目标**：根目录文件归位到 `src/`；`stv3d_core` / `stv3d_render_gl` / exe / core 单测 立起来（core 零依赖由编译期强制） | ✅ 已完成 |
 | 2 | **补数学**：新增 `conventions.h`、`quat.h`；`mat3/mat4` 修 bug 并补齐 `lookAt / perspective(两套) / ortho / fromTRS / inverse / determinant`；core 单测 67 项 | ✅ 已完成 |
 | 3 | **换类型**：`Camera.h`、`Model.h`、`Character.*` 从 Qt 数学类型换成 `core` 的 `vec3/quat/mat4`，并独立出 `stv3d_engine` 目标（零 Qt）；engine 单测 67 项 | ✅ 已完成 |
-| 4 | **拆网格**：`render/Mesh` 的 GPU 句柄与 `core/geometry/MeshData` 彻底分离，engine 只持有句柄（`MyModel` 现在仍以 `shared_ptr<MyMesh>` 前置声明引用几何） | ⏭ 下一步 |
+| 4 | **拆网格**：`render/Mesh` 的 GPU 句柄与 `core/geometry/MeshData` 彻底分离，engine 只持有句柄（`Model` 现在仍以 `shared_ptr<Mesh>` 前置声明引用几何） | ⏭ 下一步 |
 | 5 | **抽 RHI**：定义 `IRenderDevice`（`createMesh / beginFrame / submit / endFrame`），GL 调用收进 `render/gl/` | ⏭ |
 | 6 | **抽 engine**：`3d.h` 拆成场景层（模型列表、角色、输入映射）+ 渲染队列 | ⏭ |
 | 7 | **Qt 下沉**：`platform/qt/{QtWindow, QtTimer, QtFileLogSink}` + `app/main` 组装；`core/log/LogManager` 目前仍用 Qt，是唯一"名不副实"的文件 | ⏭ |
@@ -322,7 +338,10 @@ g++ -std=c++17 shader_test.cpp  $src/render/ShaderProgram.cpp -o shader_test.exe
 - `nlohmann-json` 已安装但未使用；目前**所有参数仍是代码内常量**，可统一抽成 `config.json`
 - 自由飞行的调试相机已移除（只剩 FPV / TPV）；如需"上帝视角"可加第三个 `CameraView`
 - TPV 俯仰限位为 `[-89°, 89°]`：相机会绕到角色**下方**（当前没有地面，所以不会穿地）
-- 网格只有立方体一种；`MyMeshFactory` 可继续加球/平面，或写 OBJ 读取器
+- 网格只有立方体一种；`MeshFactory` 可继续加球/平面，或写 OBJ 读取器
 - `src/core/geometry/generator/VertexGen.h` 里的 `void VertexGen()` 仍是空壳
+- **两处待清理的重复**：`src/core/geometry/Mesh.h` 是重构前的死代码（把 GPU 句柄留在了 core 层，
+  没人 include），应删掉或改成纯数据；另外 `Vertex` 这个名字同时被 `core/geometry/Vertex.h`
+  （`pos/norm/uv`）与 `render/Mesh.h`（`position/color`）使用，等第 4 步拆网格时统一掉
 - 阴影、光照、纹理、实例化（`glDrawElementsInstanced`）都还没做
 - **注释语言**：源码注释与日志文案已统一为英文；本 README 按你的要求保持中文

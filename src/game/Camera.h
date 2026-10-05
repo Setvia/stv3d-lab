@@ -33,33 +33,33 @@ enum class CameraView
 // The clip-space convention (depth range and Y direction) is selectable instead of being
 // hard-coded, because it is the one thing that genuinely differs between OpenGL
 // ([-1,1], +Y up) and Vulkan/D3D ([0,1], +Y down). See core/math/conventions.h.
-class MyCamera
+class Camera
 {
 public:
-    MyCamera() = default;
+    Camera() = default;
 
-    MyCamera(const vec3& position, const quat& orientation)
-        : m_position(position), m_orientation(orientation.normalized())
+    Camera(const vec3& position, const quat& orientation)
+        : position(position), orientation(orientation.normalized())
     {
     }
 
     // ---------- position ----------
-    void setPosition(const vec3& position) { m_position = position; }
-    vec3 position() const { return m_position; }
+    void setPosition(const vec3& position) { this->position = position; }
+    vec3 getPosition() const { return position; }
 
     // ---------- orientation (unit quaternion) ----------
     void setOrientation(const quat& orientation)
     {
         const quat normalized = orientation.normalized();
-        m_orientation = (normalized.length() < 1e-6f) ? quat{} : normalized;
+        this->orientation = (normalized.length() < 1e-6f) ? quat{} : normalized;
     }
-    quat orientation() const { return m_orientation; }
+    quat getOrientation() const { return orientation; }
 
     // Point the camera at `target`. The target and the up vector are converted into a
     // quaternion and not stored afterwards.
     void lookAt(const vec3& target, const vec3& worldUp = vec3{0.0f, 1.0f, 0.0f})
     {
-        vec3 forward_dir = target - m_position;
+        vec3 forward_dir = target - position;
         if (forward_dir.length() < 1e-6f)
         {
             return;  // degenerate: target coincides with the camera
@@ -79,7 +79,7 @@ public:
 
         // Columns of the rotation matrix are the local basis vectors expressed in world
         // space: X = right, Y = up, Z = -forward
-        m_orientation = quat::fromMat3(mat3::fromColumns(right_dir, true_up, -forward_dir)).normalized();
+        orientation = quat::fromMat3(mat3::fromColumns(right_dir, true_up, -forward_dir)).normalized();
     }
 
     // ---------- rotation ----------
@@ -90,8 +90,8 @@ public:
         {
             return;
         }
-        m_orientation = quat::fromAxisAngle(worldAxis, degrees * kDegToRad) * m_orientation;
-        m_orientation = m_orientation.normalized();
+        orientation = quat::fromAxisAngle(worldAxis, degrees * kDegToRad) * orientation;
+        orientation = orientation.normalized();
     }
 
     // Around one of the camera's own axes (post-multiply): used for pitch around local X
@@ -101,8 +101,8 @@ public:
         {
             return;
         }
-        m_orientation = m_orientation * quat::fromAxisAngle(localAxis, degrees * kDegToRad);
-        m_orientation = m_orientation.normalized();
+        orientation = orientation * quat::fromAxisAngle(localAxis, degrees * kDegToRad);
+        orientation = orientation.normalized();
     }
 
     // Mouse look (FPV): yaw around world Y, pitch around local X, pitch clamped to
@@ -124,9 +124,9 @@ public:
     }
 
     // ---------- local axes (derived from the quaternion, always orthonormal) ----------
-    vec3 forward() const { return m_orientation.rotate(vec3{0.0f, 0.0f, -1.0f}); }
-    vec3 right() const { return m_orientation.rotate(vec3{1.0f, 0.0f, 0.0f}); }
-    vec3 up() const { return m_orientation.rotate(vec3{0.0f, 1.0f, 0.0f}); }
+    vec3 forward() const { return orientation.rotate(vec3{0.0f, 0.0f, -1.0f}); }
+    vec3 right() const { return orientation.rotate(vec3{1.0f, 0.0f, 0.0f}); }
+    vec3 up() const { return orientation.rotate(vec3{0.0f, 1.0f, 0.0f}); }
 
     // Pitch in degrees (+ = looking up); derived from forward(), used for clamping/debug
     float pitchDegrees() const
@@ -143,45 +143,45 @@ public:
     }
 
     // ---------- movement ----------
-    void move(const vec3& worldDelta) { m_position += worldDelta; }
+    void move(const vec3& worldDelta) { position += worldDelta; }
 
     // Move in the camera's own frame: forward along the view direction, right, upward
     void moveLocal(float forwardAmount, float rightAmount, float upwardAmount)
     {
-        m_position += forward() * forwardAmount + right() * rightAmount + up() * upwardAmount;
+        position += forward() * forwardAmount + right() * rightAmount + up() * upwardAmount;
     }
 
     // ---------- projection parameters ----------
     void setPerspective(float fovYDegrees, float nearPlane, float farPlane)
     {
-        m_fov_y = std::clamp(fovYDegrees, 1.0f, 179.0f);
-        m_near = nearPlane;
-        m_far = farPlane;
+        fov_y = std::clamp(fovYDegrees, 1.0f, 179.0f);
+        near_plane = nearPlane;
+        far_plane = farPlane;
     }
 
-    void setViewportAspect(float aspect) { m_aspect = (aspect > 0.0f) ? aspect : 1.0f; }
+    void setViewportAspect(float aspect) { this->aspect = (aspect > 0.0f) ? aspect : 1.0f; }
 
-    float fovYDegrees() const { return m_fov_y; }
-    float aspect() const { return m_aspect; }
-    float nearPlane() const { return m_near; }
-    float farPlane() const { return m_far; }
+    float getFovYDegrees() const { return fov_y; }
+    float getAspect() const { return aspect; }
+    float getNearPlane() const { return near_plane; }
+    float getFarPlane() const { return far_plane; }
 
     // ---------- clip-space convention (OpenGL today, Vulkan later) ----------
-    void setClipDepth(ClipDepth clip) { m_clip = clip; }
-    ClipDepth clipDepth() const { return m_clip; }
-    void setFlipY(bool flip) { m_flip_y = flip; }
-    bool flipY() const { return m_flip_y; }
+    void setClipDepth(ClipDepth clip) { this->clip = clip; }
+    ClipDepth getClipDepth() const { return clip; }
+    void setFlipY(bool flip) { flip_y = flip; }
+    bool getFlipY() const { return flip_y; }
 
     // ---------- matrices (computed on demand) ----------
     // view = inverse(translate(position) * rotate(orientation))
     mat4 viewMatrix() const
     {
-        return mat4::fromQuat(m_orientation.conjugate()) * mat4::translate(-m_position);
+        return mat4::fromQuat(orientation.conjugate()) * mat4::translate(-position);
     }
 
     mat4 projectionMatrix() const
     {
-        return mat4::perspective(m_fov_y * kDegToRad, m_aspect, m_near, m_far, m_clip, m_flip_y);
+        return mat4::perspective(fov_y * kDegToRad, aspect, near_plane, far_plane, clip, flip_y);
     }
 
 private:
@@ -189,16 +189,18 @@ private:
     static constexpr float kDegToRad = kPi / 180.0f;
     static constexpr float kRadToDeg = 180.0f / kPi;
 
-    vec3 m_position{0.0f, 0.0f, 3.0f};
-    quat m_orientation;  // identity = looking down -Z with +Y up
+    vec3 position{0.0f, 0.0f, 3.0f};
+    quat orientation;  // identity = looking down -Z with +Y up
 
-    float m_fov_y = 90.0f;
-    float m_aspect = 1.0f;
-    float m_near = 0.1f;
-    float m_far = 100.0f;
+    float fov_y = 90.0f;
+    float aspect = 1.0f;
+    // Note: `near` and `far` are macros defined by <windows.h> (pulled in through Qt),
+    // so these members carry explicit plane names.
+    float near_plane = 0.1f;
+    float far_plane = 100.0f;
 
-    ClipDepth m_clip = ClipDepth::NegativeOneToOne;  // OpenGL default
-    bool m_flip_y = false;
+    ClipDepth clip = ClipDepth::NegativeOneToOne;  // OpenGL default
+    bool flip_y = false;
 };
 
 #endif  // GAME_CAMERA_H

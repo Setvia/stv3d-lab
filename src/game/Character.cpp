@@ -17,9 +17,9 @@ constexpr float kMaxCameraDistance = 100.0f;
 constexpr float kPi = 3.14159265358979323846f;
 }  // namespace
 
-// ---------------- MyCharacterController ----------------
+// ---------------- CharacterController ----------------
 
-vec3 MyCharacterController::movementDirection(const MyCamera& camera) const
+vec3 CharacterController::movementDirection(const Camera& camera) const
 {
     // Flatten the view direction: looking up or down must not change the plane the
     // character walks on.
@@ -39,19 +39,19 @@ vec3 MyCharacterController::movementDirection(const MyCamera& camera) const
     }
 
     vec3 direction;
-    if (m_input.forward)
+    if (input.forward)
     {
         direction += forward_dir;
     }
-    if (m_input.backward)
+    if (input.backward)
     {
         direction -= forward_dir;
     }
-    if (m_input.right)
+    if (input.right)
     {
         direction += right_dir;
     }
-    if (m_input.left)
+    if (input.left)
     {
         direction -= right_dir;
     }
@@ -63,7 +63,7 @@ vec3 MyCharacterController::movementDirection(const MyCamera& camera) const
     return direction.normalized();  // normalized so that diagonal movement is not faster
 }
 
-void MyCharacterController::update(vec3& position, const MyCamera& camera, float dt) const
+void CharacterController::update(vec3& position, const Camera& camera, float dt) const
 {
     if (dt <= 0.0f)
     {
@@ -79,55 +79,55 @@ void MyCharacterController::update(vec3& position, const MyCamera& camera, float
     position += direction * (currentSpeed() * dt);
 }
 
-// ---------------- MyCharacter ----------------
+// ---------------- Character ----------------
 
-MyCharacter::MyCharacter()
+Character::Character()
 {
     syncCamera();
 }
 
-void MyCharacter::update(float dt)
+void Character::update(float dt)
 {
-    m_controller.update(m_position, m_camera, dt);
+    controller.update(position, camera, dt);
     syncCamera();  // move the camera along with the character (per view mode)
 }
 
-void MyCharacter::setView(CameraView view)
+void Character::setView(CameraView view)
 {
-    if (m_view == view)
+    if (this->view == view)
     {
         return;
     }
-    m_view = view;
+    this->view = view;
     syncCamera();
 }
 
-void MyCharacter::syncCamera()
+void Character::syncCamera()
 {
-    if (m_view == CameraView::FPV)
+    if (view == CameraView::FPV)
     {
         // First person: sit at eye height. The orientation is owned by the player, so it
         // must NOT be overwritten here.
-        m_camera.setPosition(m_position + vec3{0.0f, m_eye_height, 0.0f});
+        camera.setPosition(position + vec3{0.0f, eye_height, 0.0f});
         return;
     }
 
     // Third person: camera at "position + offset", looking at the character. The look-at
-    // target height is controlled by m_camera_target_height (0 = the feet).
-    m_camera.setPosition(m_position + m_camera_offset);
-    m_camera.lookAt(m_position + vec3{0.0f, m_camera_target_height, 0.0f});
+    // target height is controlled by camera_target_height (0 = the feet).
+    camera.setPosition(position + camera_offset);
+    camera.lookAt(position + vec3{0.0f, camera_target_height, 0.0f});
 }
 
-void MyCharacter::orbitCamera(float yawDegrees, float pitchDegrees)
+void Character::orbitCamera(float yawDegrees, float pitchDegrees)
 {
-    if (m_camera_offset.length() < 1e-6f)
+    if (camera_offset.length() < 1e-6f)
     {
         return;  // degenerate: zero offset, nothing to orbit
     }
 
     // (1) Horizontal orbit: rotate the offset around world Y with a quaternion. Only the
     // direction changes, the length is preserved.
-    vec3 offset = m_camera_offset;
+    vec3 offset = camera_offset;
     if (yawDegrees != 0.0f)
     {
         offset = quat::fromAxisAngle(vec3{0.0f, 1.0f, 0.0f}, yawDegrees * kPi / 180.0f).rotate(offset);
@@ -152,22 +152,22 @@ void MyCharacter::orbitCamera(float yawDegrees, float pitchDegrees)
         }
     }
 
-    m_camera_offset = offset;
+    camera_offset = offset;
     syncCamera();
 }
 
-void MyCharacter::setCameraDistance(float distance)
+void Character::setCameraDistance(float distance)
 {
     distance = std::clamp(distance, kMinCameraDistance, kMaxCameraDistance);
 
-    const float current = m_camera_offset.length();
+    const float current = camera_offset.length();
     if (current < 1e-6f)
     {
-        m_camera_offset = vec3{0.0f, 2.0f, distance};
+        camera_offset = vec3{0.0f, 2.0f, distance};
     }
     else
     {
-        m_camera_offset *= (distance / current);  // only the length changes
+        camera_offset *= (distance / current);  // only the length changes
     }
 
     syncCamera();

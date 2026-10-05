@@ -8,15 +8,15 @@
 // into stv3d-lab.log next to the exe.
 //
 // Usage (see main.cpp):
-//     if (!MyLogManager::init()) return 1;   // open the file + install the message handler
+//     if (!LogManager::init()) return 1;   // open the file + install the message handler
 //     ...
-//     MyLogManager::shutdown();              // restore the handler + close the file
+//     LogManager::shutdown();              // restore the handler + close the file
 //
 // The implementation lives entirely in LogManager.cpp: including this header from several TUs
 // cannot produce duplicate definitions (ODR), and the file object is never exposed to outsiders,
 // so it cannot be modified by mistake.
 
-class MyLogManager
+class LogManager
 {
 public:
     // Open the log file (append mode) and install the message handler; returns true on success
@@ -35,7 +35,7 @@ private:
     // Qt message handler; output format: timestamp [level] message
     static void messageHandler(QtMsgType type, const QMessageLogContext &context, const QString &message);
 
-    MyLogManager() = delete;  // Pure static utility class; instantiation is forbidden
+    LogManager() = delete;  // Pure static utility class; instantiation is forbidden
 };
 
 #endif  // LOG_MANAGER_H

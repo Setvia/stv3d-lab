@@ -8,7 +8,7 @@
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aColor;
 
-// projection * view * model, written once per model by MyShaderProgram::setMat4("uMvp", ...)
+// projection * view * model, written once per model by ShaderProgram::setMat4("uMvp", ...)
 uniform mat4 uMvp;
 
 out vec3 vColor;

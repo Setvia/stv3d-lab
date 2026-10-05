@@ -7,44 +7,44 @@
 
 // ---------------- construction / destruction / move ----------------
 
-MyMesh::~MyMesh()
+Mesh::~Mesh()
 {
     // Note: the caller must guarantee a "current GL context" here
-    // (MyGLWidget is destroyed after makeCurrent())
+    // (GLWidget is destroyed after makeCurrent())
     destroy();
 }
 
-MyMesh::MyMesh(MyMesh &&other) noexcept
-    : m_vao(other.m_vao), m_vbo(other.m_vbo), m_ebo(other.m_ebo), m_index_count(other.m_index_count)
+Mesh::Mesh(Mesh &&other) noexcept
+    : vao(other.vao), vbo(other.vbo), ebo(other.ebo), index_count(other.index_count)
 {
     // Handle ownership transfer: null out the source so it does not delete the resources when destroyed
-    other.m_vao = 0;
-    other.m_vbo = 0;
-    other.m_ebo = 0;
-    other.m_index_count = 0;
+    other.vao = 0;
+    other.vbo = 0;
+    other.ebo = 0;
+    other.index_count = 0;
 }
 
-MyMesh &MyMesh::operator=(MyMesh &&other) noexcept
+Mesh &Mesh::operator=(Mesh &&other) noexcept
 {
     if (this != &other) {
         destroy();  // release our own resources first
 
-        m_vao = other.m_vao;
-        m_vbo = other.m_vbo;
-        m_ebo = other.m_ebo;
-        m_index_count = other.m_index_count;
+        vao = other.vao;
+        vbo = other.vbo;
+        ebo = other.ebo;
+        index_count = other.index_count;
 
-        other.m_vao = 0;
-        other.m_vbo = 0;
-        other.m_ebo = 0;
-        other.m_index_count = 0;
+        other.vao = 0;
+        other.vbo = 0;
+        other.ebo = 0;
+        other.index_count = 0;
     }
     return *this;
 }
 
 // ---------------- create / destroy ----------------
 
-void MyMesh::create(const std::vector<MyVertex> &vertices, const std::vector<GLuint> &indices)
+void Mesh::create(const std::vector<Vertex> &vertices, const std::vector<GLuint> &indices)
 {
     if (vertices.empty() || indices.empty()) {
         return;  // empty mesh: create no GL objects at all
@@ -65,18 +65,18 @@ void MyMesh::create(const std::vector<MyVertex> &vertices, const std::vector<GLu
     destroy();  // wipe the old objects first when create() is called again
 
     // Under the core profile every buffer binding requires a bound VAO first
-    glGenVertexArrays(1, &m_vao);
-    glBindVertexArray(m_vao);
+    glGenVertexArrays(1, &vao);
+    glBindVertexArray(vao);
 
-    glGenBuffers(1, &m_vbo);
-    glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
+    glGenBuffers(1, &vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
     glBufferData(GL_ARRAY_BUFFER,
-                 static_cast<GLsizeiptr>(vertices.size() * sizeof(MyVertex)),
+                 static_cast<GLsizeiptr>(vertices.size() * sizeof(Vertex)),
                  vertices.data(),
                  GL_STATIC_DRAW);
 
-    glGenBuffers(1, &m_ebo);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_ebo);
+    glGenBuffers(1, &ebo);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER,
                  static_cast<GLsizeiptr>(indices.size() * sizeof(GLuint)),
                  indices.data(),
@@ -84,9 +84,9 @@ void MyMesh::create(const std::vector<MyVertex> &vertices, const std::vector<GLu
 
     // (1) Attribute format: attribute number, component count, type, normalized flag, byte offset (offsetof spells it out)
     glVertexAttribFormat(kAttribPos, 3, GL_FLOAT, GL_FALSE,
-                         static_cast<GLuint>(offsetof(MyVertex, position)));
+                         static_cast<GLuint>(offsetof(Vertex, position)));
     glVertexAttribFormat(kAttribColor, 3, GL_FLOAT, GL_FALSE,
-                         static_cast<GLuint>(offsetof(MyVertex, color)));
+                         static_cast<GLuint>(offsetof(Vertex, color)));
 
     // (2) Attribute -> binding index
     glVertexAttribBinding(kAttribPos, kBindingInterleaved);
@@ -96,59 +96,59 @@ void MyMesh::create(const std::vector<MyVertex> &vertices, const std::vector<GLu
     glEnableVertexAttribArray(kAttribColor);
 
     // (3) Binding index -> concrete buffer + start offset + stride
-    glBindVertexBuffer(kBindingInterleaved, m_vbo, 0, vertexStride());
+    glBindVertexBuffer(kBindingInterleaved, vbo, 0, vertexStride());
 
-    m_index_count = static_cast<GLsizei>(indices.size());
+    index_count = static_cast<GLsizei>(indices.size());
 
     glBindVertexArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
 }
 
-void MyMesh::destroy()
+void Mesh::destroy()
 {
     // Skip straight away when the handle is 0: this keeps the call repeatable and safe
     // to no-op after the context has already been destroyed
-    if (m_ebo != 0) {
-        glDeleteBuffers(1, &m_ebo);
-        m_ebo = 0;
+    if (ebo != 0) {
+        glDeleteBuffers(1, &ebo);
+        ebo = 0;
     }
-    if (m_vbo != 0) {
-        glDeleteBuffers(1, &m_vbo);
-        m_vbo = 0;
+    if (vbo != 0) {
+        glDeleteBuffers(1, &vbo);
+        vbo = 0;
     }
-    if (m_vao != 0) {
-        glDeleteVertexArrays(1, &m_vao);
-        m_vao = 0;
+    if (vao != 0) {
+        glDeleteVertexArrays(1, &vao);
+        vao = 0;
     }
-    m_index_count = 0;
+    index_count = 0;
 }
 
 // ---------------- drawing ----------------
 
-void MyMesh::draw()
+void Mesh::draw()
 {
     if (!isValid()) {
         return;
     }
 
     // Bind explicitly all state needed for drawing, without relying on the copy recorded in the VAO
-    glBindVertexArray(m_vao);
-    glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_ebo);
-    glBindVertexBuffer(kBindingInterleaved, m_vbo, 0, vertexStride());
+    glBindVertexArray(vao);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
+    glBindVertexBuffer(kBindingInterleaved, vbo, 0, vertexStride());
 
-    glDrawElements(GL_TRIANGLES, m_index_count, GL_UNSIGNED_INT, nullptr);
+    glDrawElements(GL_TRIANGLES, index_count, GL_UNSIGNED_INT, nullptr);
 
     glBindVertexArray(0);
 }
 
 // ---------------- geometry factories ----------------
 
-namespace MyMeshFactory
+namespace MeshFactory
 {
 
-void makeCube(std::vector<MyVertex> &vertices, std::vector<GLuint> &indices, float size)
+void makeCube(std::vector<Vertex> &vertices, std::vector<GLuint> &indices, float size)
 {
     const float h = size * 0.5f;  // half edge length
 
@@ -174,4 +174,4 @@ void makeCube(std::vector<MyVertex> &vertices, std::vector<GLuint> &indices, flo
     };
 }
 
-}  // namespace MyMeshFactory
+}  // namespace MeshFactory

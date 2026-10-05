@@ -14,12 +14,12 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 #   stv3d_engine        scene-side logic: camera, model instances, character. Links only
 #                       stv3d_core - no Qt, no OpenGL, no window.
 #   stv3d_render_gl     OpenGL backend (still uses Qt's QOpenGLFunctions wrapper).
-#   stv3d_app           the executable: Qt window, input events, scene assembly.
+#   stv3d-lab           the executable: Qt window, input events, scene assembly.
 #   stv3d_core_tests    unit tests for core   (no Qt, no GPU)
 #   stv3d_engine_tests  unit tests for engine (no Qt, no GPU)
 #
 # Future steps: stv3d_render_vk (Vulkan backend), stv3d_platform_qt (window/input/timer
-# implementations). Both plug in below stv3d_app without touching core or engine.
+# implementations). Both plug in below stv3d-lab without touching core or engine.
 # ---------------------------------------------------------------------------
 
 # ---- stv3d_core: zero third-party dependencies -----------------------------
