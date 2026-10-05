@@ -12,13 +12,19 @@ GLWidget::GLWidget(QWidget *parent) : QOpenGLWidget(parent)
     setMouseTracking(false);  // only handle mouse moves while the left button is held and dragging
 
     // Main loop driving:
-    //   ticked       -- fixed step (1/60 s by default) logic update: model spin, character advance, keyboard camera movement
-    //   frameStepped -- once per frame: request a repaint only (rendering decoupled from logic)
-    connect(&game_loop, &GameLoop::ticked, this, [this](std::uint64_t) { onGameTick(); });
-    connect(&game_loop, &GameLoop::frameStepped, this, [this](float) { onGameFrame(); });
+    //   tick callback  -- fixed step (1/60 s by default) logic update: model spin, character advance, keyboard camera movement
+    //   frame callback -- once per frame: request a repaint only (rendering decoupled from logic)
+    //
+    // GameLoop itself owns no timer (see GameLoop.h): the platform drives it by calling advance().
+    // While Qt is still here that is a QTimer; the Win32 message pump takes the job over in step A3
+    // and this timer disappears together with Qt.
+    game_loop.setTickCallback([this](std::uint64_t) { onGameTick(); });
+    game_loop.setFrameCallback([this](float) { onGameFrame(); });
+    connect(&loop_timer, &QTimer::timeout, this, [this] { game_loop.advance(); });
 
     game_loop.init();
     game_loop.start();
+    loop_timer.start(game_loop.getFrameInterval());
 
     LOG_INFO() << "game loop started: fixed tick = " << game_loop.getFixedTickSeconds()
                << " s, frame interval = " << game_loop.getFrameInterval() << " ms";
@@ -28,6 +34,8 @@ GLWidget::GLWidget(QWidget *parent) : QOpenGLWidget(parent)
 
 GLWidget::~GLWidget()
 {
+    loop_timer.stop();  // no more ticks/frames while the GL objects below are being destroyed
+
     // GL objects must be destroyed while the context is valid, hence makeCurrent()
     makeCurrent();
     releaseGlResources();

@@ -1,14 +1,11 @@
 #ifndef GAME_LOOP_H
 #define GAME_LOOP_H
 
+#include <chrono>
 #include <cstdint>
 #include <deque>
 #include <functional>
 #include <vector>
-
-#include <QElapsedTimer>
-#include <QObject>
-#include <QTimer>
 
 // Game loop state bits (a one-byte bit field describing the loop's current state)
 using GameLoopState = std::uint8_t;
@@ -52,22 +49,30 @@ private:
     std::vector<Task> real_time_tasks;
 };
 
-// Game main loop.
+// Game main loop: fixed-step logic ticks plus one frame step.
 //
-// Note: this **no longer** uses a blocking `while (state) { ... }` loop: Qt's event loop (app.exec())
-// must keep running to process window/input events, and blocking the UI thread would freeze it, so
-// mainLoop() advances one frame, driven by the internal QTimer with a fixed-timestep accumulator.
-class GameLoop : public QObject
+// No Qt and no window: this class owns neither a timer nor an event loop. The platform layer (Qt
+// today, the Win32 message pump from step A3 on) owns those and calls advance() once per turn of its
+// pump. Splitting the time source out that way also makes the loop testable: advanceBy() takes the
+// elapsed time as an argument, so the accumulator can be exercised with exact numbers instead of
+// sleeping in a test.
+//
+// Note: there is deliberately no blocking `while (state) { ... }` loop. The event pump must keep
+// running, otherwise the window stops responding; the loop is advanced from the pump instead.
+class GameLoop
 {
-    Q_OBJECT  // required: without it signals/slots are unusable and connect() fails to compile
-
 public:
-    explicit GameLoop(QObject *parent = nullptr);
+    using TickCallback = std::function<void(std::uint64_t tickCount)>;
+    using FrameCallback = std::function<void(float dt)>;
+
+    GameLoop() = default;
+    GameLoop(const GameLoop &) = delete;             // a service object: one owner, no copies
+    GameLoop &operator=(const GameLoop &) = delete;
 
     void init();   // initialize the state bits and the clock
-    void start();  // start (runs init first if needed)
-    void pause();  // pause time advance (state is preserved)
-    void exit();   // stop the timer and clear all tasks
+    void start();  // start (runs init first if needed); also re-arms a paused loop and resets the clock
+    void pause();  // pause time advance (the state is preserved; frames and their callbacks keep running)
+    void exit();   // stop everything and clear all tasks
 
     GameLoopState getState() const { return loop_state; }
     bool isActive() const { return (loop_state & GameLoopFlags::EVENT_ACTIVE) != 0; }
@@ -75,29 +80,46 @@ public:
 
     TaskScheduler &getScheduler() { return scheduler; }
 
-    // Frame interval in milliseconds, default 16ms ≈ 60fps
-    void setFrameInterval(int milliseconds);
-    int getFrameInterval() const { return timer.interval(); }
+    // Callbacks replace the Qt signals the loop used to emit
+    void setTickCallback(TickCallback callback) { tick_callback = std::move(callback); }
+    void setFrameCallback(FrameCallback callback) { frame_callback = std::move(callback); }
 
-    // Fixed timestep of one logic tick (seconds), default 1/60. Physics/character/animation should all step by this to stay frame-rate independent
+    // Frame interval in milliseconds, default 16ms ~ 60fps.
+    // This is the interval the platform pump should run at; the loop itself never waits.
+    void setFrameInterval(int milliseconds);
+    int getFrameInterval() const { return frame_interval_ms; }
+
+    // Fixed timestep of one logic tick (seconds), default 1/60. Physics/character/animation should
+    // all step by this to stay frame-rate independent
     double getFixedTickSeconds() const { return fixed_tick_seconds; }
     void setFixedTickSeconds(double seconds);
 
-    // Pending queue: executed in order at the start of the current frame
+    // Leftover time that did not add up to a whole tick yet (exposed for tests of the accumulator)
+    double getTickAccumulator() const { return tick_accumulator; }
+
+    // Pending queue: executed in order at the start of the next step
     void enqueue(Task task);
 
-signals:
-    void ticked(std::uint64_t tickCount);  // every logic tick
-    void frameStepped(float dt);           // every frame
+    // Advance the loop by one pump turn: sample the clock, then run advanceBy(elapsed)
+    void advance();
+
+    // Advance the loop by an explicit amount of time (seconds).
+    // This is the deterministic core: advance() only supplies the number.
+    void advanceBy(double elapsed_seconds);
 
 private:
-    void mainLoop();  // advance one frame (private: driven by the internal timer)
+    // One step: drain the pending queue, run 0..N logic ticks, then the frame tasks
+    void mainLoop(double elapsed_seconds);
+
+    TickCallback tick_callback;
+    FrameCallback frame_callback;
 
     GameLoopState loop_state = 0;
     std::deque<Task> task_queue;
     TaskScheduler scheduler;
-    QTimer timer{this};  // value member + Qt parent/child: no more raw-pointer new (that used to leak)
-    QElapsedTimer clock;
+    std::chrono::steady_clock::time_point last_time{};
+
+    int frame_interval_ms = 16;
     std::uint64_t tick_count = 0;
     double tick_accumulator = 0.0;
     double fixed_tick_seconds = 1.0 / 60.0;

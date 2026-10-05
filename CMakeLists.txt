@@ -72,19 +72,19 @@ add_library(stv3d_engine STATIC
     src/game/Model.h
     src/game/Character.cpp
     src/game/Character.h
+    src/game/GameLoop.cpp
+    src/game/GameLoop.h
 )
 target_link_libraries(stv3d_engine PUBLIC stv3d_core)
 
 # ---- stv3d_app: the executable (Qt lives here and above) ------------------
-# Header files are listed so AUTOMOC can see the Q_OBJECT headers (3d.h, GameLoop.h).
+# Header files are listed so AUTOMOC can see the last Q_OBJECT header (3d.h).
 # stv3d-lab.qrc embeds the shaders into the executable (AUTORCC).
-# LogManager moved into stv3d_core: it is Qt-free now, so logging is a core service.
+# LogManager moved into stv3d_core and GameLoop into stv3d_engine: both are Qt-free services now.
 add_executable(stv3d-lab
     src/main.cpp
     src/game/3d.cpp
     src/game/3d.h
-    src/game/GameLoop.cpp
-    src/game/GameLoop.h
     stv3d-lab.qrc
 )
 set_target_properties(stv3d-lab PROPERTIES

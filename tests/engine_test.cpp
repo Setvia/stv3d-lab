@@ -1,11 +1,12 @@
-// Unit tests for the engine layer: camera, model instances and the character controller.
+// Unit tests for the engine layer: camera, model instances, the character controller and the loop.
 //
 // These link only stv3d_engine (which links only stv3d_core): no Qt, no OpenGL, no window.
-// They exist because Camera/Model/Character were converted to core math types - as long as
-// this executable builds, those three files are free of Qt.
+// They exist because Camera/Model/Character/GameLoop were converted to core types - as long as
+// this executable builds, those files are free of Qt.
 
 #include "game/Camera.h"
 #include "game/Character.h"
+#include "game/GameLoop.h"
 #include "game/Model.h"
 
 #include "core/math/mat4.h"
@@ -13,6 +14,7 @@
 #include "core/math/vec3.h"
 
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 
@@ -341,6 +343,121 @@ int main()
         check(near(zoom.cameraDistance(), 0.5f), "zoom: too close is clamped to 0.5");
         zoom.setCameraDistance(999.0f);
         check(near(zoom.cameraDistance(), 100.0f), "zoom: too far is clamped to 100");
+    }
+
+    // ============================== game loop ==============================
+    // The loop takes its elapsed time as an argument (advanceBy), so the accumulator can be
+    // exercised with exact numbers instead of sleeping.
+    {
+        const double tick = 1.0 / 60.0;
+
+        GameLoop loop;
+        check(!loop.isActive(), "loop: not active before start");
+        check(loop.getFrameInterval() == 16, "loop: the default frame interval is 16 ms");
+        check(near(static_cast<float>(loop.getFixedTickSeconds()), 1.0f / 60.0f),
+              "loop: the default fixed tick is 1/60 s");
+
+        loop.init();
+        check((loop.getState() & GameLoopFlags::INITIALIZED) != 0, "loop: init sets the INITIALIZED bit");
+        check(!loop.isActive(), "loop: init alone does not activate the loop");
+
+        int ticks = 0;
+        int frames = 0;
+        float last_dt = 0.0f;
+        std::uint64_t last_tick_number = 0;
+        loop.setTickCallback([&](std::uint64_t tickNumber) { ++ticks; last_tick_number = tickNumber; });
+        loop.setFrameCallback([&](float dt) { ++frames; last_dt = dt; });
+
+        // Nothing runs while the loop is inactive (the pending queue is the only exception, below)
+        loop.advanceBy(1.0);
+        check(ticks == 0 && frames == 0, "loop: an inactive loop runs nothing");
+
+        loop.start();
+        check(loop.isActive(), "loop: start activates the loop");
+        check((loop.getState() & GameLoopFlags::TIME_ACTIVE) != 0, "loop: start enables time advance");
+
+        loop.advanceBy(tick);
+        check(ticks == 1, "loop: one tick of elapsed time produces exactly one logic tick");
+        check(last_tick_number == 1, "loop: the tick callback receives the running tick number");
+        check(frames == 1, "loop: one frame callback per advance");
+        check(near(last_dt, static_cast<float>(tick)), "loop: the frame callback receives dt in seconds");
+
+        // Sub-tick leftovers accumulate instead of producing a tick each time
+        loop.advanceBy(0.01);
+        check(ticks == 1, "loop: a leftover shorter than one tick produces no tick");
+        check(near(static_cast<float>(loop.getTickAccumulator()), 0.01f),
+              "loop: the leftover stays in the accumulator");
+        loop.advanceBy(0.01);
+        check(ticks == 2, "loop: two leftovers add up to one tick");
+        check(near(static_cast<float>(loop.getTickAccumulator()), 0.0033f, 1e-3f),
+              "loop: the accumulator keeps only the remainder");
+
+        // A long stall is capped: at most 5 catch-up ticks, and the backlog is dropped
+        const std::uint64_t before_stall = loop.getTickCount();
+        loop.advanceBy(10.0);
+        check(loop.getTickCount() - before_stall == 5, "loop: a long frame catches up at most 5 ticks");
+        check(near(static_cast<float>(loop.getTickAccumulator()), 0.0f),
+              "loop: the backlog is dropped after the catch-up cap (no death spiral)");
+
+        // pause(): time stops, frames keep coming
+        loop.pause();
+        const int ticks_before_pause = ticks;
+        const int frames_before_pause = frames;
+        loop.advanceBy(1.0);
+        check(ticks == ticks_before_pause, "loop: pause stops the logic ticks");
+        check(frames == frames_before_pause + 1, "loop: pause still renders frames");
+        check(loop.isActive(), "loop: pause keeps the loop active");
+
+        loop.start();  // re-arm: this is also what resets the clock
+        loop.advanceBy(tick);
+        check(ticks == ticks_before_pause + 1, "loop: start() after pause resumes the logic ticks");
+
+        // enqueue(): runs at the start of the next step, exactly once
+        int queued = 0;
+        loop.enqueue([&] { ++queued; });
+        loop.enqueue([&] { ++queued; });
+        loop.advanceBy(0.0);
+        check(queued == 2, "loop: enqueued tasks run on the next advance");
+        loop.advanceBy(0.0);
+        check(queued == 2, "loop: enqueued tasks are removed after they ran");
+
+        // TaskScheduler: one call per kind and step, clear() empties all three lists
+        int scheduled_ticks = 0;
+        int scheduled_frames = 0;
+        int scheduled_realtime = 0;
+        loop.getScheduler().addTickTask([&] { ++scheduled_ticks; });
+        loop.getScheduler().addFrameTask([&] { ++scheduled_frames; });
+        loop.getScheduler().addRealTimeTask([&] { ++scheduled_realtime; });
+        loop.advanceBy(tick);
+        check(scheduled_ticks == 1 && scheduled_frames == 1 && scheduled_realtime == 1,
+              "loop: scheduler tasks run once per tick/frame");
+        loop.getScheduler().clear();
+        loop.advanceBy(tick);
+        check(scheduled_ticks == 1 && scheduled_frames == 1 && scheduled_realtime == 1,
+              "loop: scheduler::clear() removes all three task kinds");
+
+        // Defensive input: a zero or negative delta must not tick, and non-positive settings are ignored
+        const std::uint64_t before_zero = loop.getTickCount();
+        loop.advanceBy(0.0);
+        loop.advanceBy(-5.0);
+        check(loop.getTickCount() == before_zero, "loop: a zero or negative delta produces no tick");
+        loop.setFixedTickSeconds(0.0);
+        check(near(static_cast<float>(loop.getFixedTickSeconds()), 1.0f / 60.0f),
+              "loop: a non-positive fixed tick is ignored");
+        loop.setFixedTickSeconds(0.5);
+        check(near(static_cast<float>(loop.getFixedTickSeconds()), 0.5f),
+              "loop: setFixedTickSeconds takes effect");
+        loop.setFrameInterval(0);
+        check(loop.getFrameInterval() == 16, "loop: an invalid frame interval falls back to 16 ms");
+        loop.setFrameInterval(33);
+        check(loop.getFrameInterval() == 33, "loop: setFrameInterval takes effect");
+
+        // exit(): stops the loop, clears the queue and the scheduler
+        loop.exit();
+        check(!loop.isActive(), "loop: exit deactivates the loop");
+        const int frames_before_exit_step = frames;
+        loop.advanceBy(tick);
+        check(frames == frames_before_exit_step, "loop: an exited loop runs nothing");
     }
 
     std::printf("\n%s (%d failure(s))\n", g_failures == 0 ? "all checks passed" : "FAILURES", g_failures);

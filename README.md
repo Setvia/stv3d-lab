@@ -73,7 +73,7 @@ stv3d-lab/
 │   │   ├─ Model.h             Model：网格引用 + 变换 + 自转（★ 已用 core 数学）
 │   │   ├─ Character.h/.cpp    Character(Controller)：位置 + 控制器 + FPV/TPV（★ 已用 core 数学）
 │   │   ├─ 3d.h/.cpp           GLWidget：GL 资源装配 + 输入 + 场景 + 渲染队列（Qt 边界）
-│   │   └─ GameLoop.h/.cpp     GameLoop：固定步长逻辑刻 + 每帧回调 + 任务调度（Qt 边界）
+│   │   └─ GameLoop.h/.cpp     GameLoop：固定步长逻辑刻 + 每帧回调 + 任务调度（★ 已去 Qt，引擎层）
 │   ├─ render/                 GPU 侧（当前是 OpenGL 后端）
 │   │   ├─ Mesh.h/.cpp         Mesh：VAO/VBO/EBO + 显式属性绑定
 │   │   ├─ ShaderProgram.h/.cpp ShaderProgram：编译/链接/uniform 位置缓存（uniform 收 core 类型）
@@ -94,12 +94,13 @@ stv3d-lab/
 依赖方向严格向下，**Qt 只允许出现在最上面**：
 
 ```
-stv3d-lab (exe)   src/main.cpp、src/game/{3d,GameLoop}.*                            ← Qt + OpenGL + cpr
-   ├─ stv3d_engine     src/game/{Camera.h, Model.h, Character.*}            ← 只链 core（无 Qt / 无 GL）
+stv3d-lab (exe)   src/main.cpp、src/game/3d.*                                      ← Qt + OpenGL + cpr
+   ├─ stv3d_engine     src/game/{Camera.h, Model.h, Character.*, GameLoop.*}  ← 只链 core（无 Qt / 无 GL）
    ├─ stv3d_render_gl  src/render/*                                         ← OpenGL 后端
    └─ stv3d_core       src/core/*                                           ← 零依赖（无 Qt、无 GL）
 stv3d_core_tests   tests/core_math_test.cpp      ← 只链 stv3d_core
 stv3d_engine_tests tests/engine_test.cpp         ← 只链 stv3d_engine
+stv3d_core_log_tests tests/core_log_test.cpp     ← 只链 stv3d_core
 ```
 
 ```
@@ -122,7 +123,10 @@ stv3d-lab (exe)
 - `src/core/core_smoke.cpp` 是守卫 TU，能被裸编译器单独编过就是解耦的证明：
   `g++ -std=c++17 -c src/core/core_smoke.cpp -Isrc`
 - engine 层同样可以用裸编译器验证：`g++ -std=c++17 -c src/game/Character.cpp -Isrc`
-- 单测目标只链 core/engine → 不需要窗口和显卡，`ctest` 0.2 秒跑完两个套件
+  （`GameLoop.cpp` 也一样，它已经不带 Qt 了）
+- 单测目标只链 core/engine → 不需要窗口和显卡，`ctest` 0.25 秒跑完三个套件
+- 现在还剩 Qt 的地方只有两处：**app 层**（`main.cpp`、`3d.h/.cpp` 的窗口与输入）与 **render 层**
+  （`Mesh`/`ShaderProgram` 借用 `QOpenGLFunctions_4_3_Core` 的函数表）；这两处在 A3/A4 一并去掉
 
 ### 新增一个模块时放哪里
 
@@ -204,13 +208,18 @@ stv3d-lab (exe)
 - 编译/链接失败把 GL info log 写进日志；`readTextFile()` 为静态工具方法
 - 同样：禁拷贝可移动、无上下文时优雅失败
 
-### `GameLoop` / `TaskScheduler`（src/game/GameLoop.h/.cpp）
+### `GameLoop` / `TaskScheduler`（src/game/GameLoop.h/.cpp → `stv3d_engine`，**无 Qt**）
 - `init()/start()/pause()/exit()`、`isActive()`、`getState()`（位标志 `GameLoopFlags`）、`getTickCount()`
 - 固定步长：`getFixedTickSeconds()`（默认 1/60）、`setFixedTickSeconds()`；帧间隔 `setFrameInterval(ms)` / `getFrameInterval()`（默认 16）
-- 信号：`ticked(tickCount)`（每次逻辑刻）、`frameStepped(dt)`（每帧）
-- 累加器最多补 5 个逻辑刻（防"死亡螺旋"）；`enqueue(task)` 的待办在当前帧开头执行
-- **不使用 `while` 阻塞循环**：Qt 事件循环必须持续运行，阻塞会把界面冻死
-- `mainLoop()` 是私有单帧推进，由内部 `QTimer` 驱动
+- **回调替代了原来的 Qt 信号**：`setTickCallback(cb(tickCount))`、`setFrameCallback(cb(dt))`
+- **循环自己不持有时钟/事件循环**：由平台层每个泵循环调一次 `advance()`；
+  `advanceBy(elapsedSeconds)` 是确定性的内核（`advance()` 只负责从 `steady_clock` 采一个数给它），
+  所以累加器可以用精确数字测，不用在测试里 sleep
+- 累加器最多补 5 个逻辑刻，超过就丢弃积压（防"死亡螺旋"）；`enqueue(task)` 的待办在当前步开头执行
+- `pause()` 只停逻辑刻，帧与回调照跑；`start()` 兼作"恢复"并重置时钟（暂停期间的时间不会一次性涌进来）
+- 时间不活跃时（`pause()` 之后）只跑帧回调；未 `start()` 时除待办队列外什么都不跑
+- **不使用 `while` 阻塞循环**：事件泵必须持续运行，阻塞会让窗口失去响应
+- `mainLoop(elapsedSeconds)` 是私有单步推进，由 `advance()/advanceBy()` 调用
 
 ### `LogManager`（src/core/log/LogManager.h/.cpp → `stv3d_core`，**零依赖，std only**）
 
@@ -251,22 +260,25 @@ stv3d-lab (exe)
 ## 6. 每帧数据流
 
 ```
-GameLoop（QTimer 16ms）
+平台泵（现在：QTimer 16ms 调 game_loop.advance()；A3 起：Win32 消息循环）
  │
- ├─ 累加器按 1/60 推进 N 次 ── emit ticked ──► GLWidget::onGameTick()
+ ├─ 累加器按 1/60 推进 N 次 ── tick 回调 ──► GLWidget::onGameTick()
  │                                              ├─ 每个 Model::updateSpin(fixedDt)
  │                                              └─ updateCharacter(fixedDt)
  │                                                   键盘 → CharacterController::InputState
  │                                                        → Character::update(fixedDt)
  │                                                        → 位移 + syncCamera()（按 FPV/TPV 摆放）
  │
- └─ emit frameStepped ──► onGameFrame() ──► update() ──► paintGL()
+ └─ frame 回调 ──► onGameFrame() ──► update() ──► paintGL()
                                                           ├─ camera = character.getCamera()
                                                           ├─ VP = projectionMatrix() × viewMatrix()
                                                           └─ 对每个模型：
                                                                program.setMat4("uMvp", VP × modelMatrix())
                                                                mesh->draw()   // 显式重放绑定 + glDrawElements
 ```
+
+> `GameLoop` 不再自己起定时器：平台层每转一圈泵就调一次 `advance()`，逻辑刻与帧的节奏由累加器决定，
+> 窗口层只负责"什么时候给它时间"。（A2 之后 `core` 与 `engine` 已经完全没有 Qt，剩下的 Qt 只在 app 与 render 层。）
 
 ## 7. 输入映射
 
@@ -324,7 +336,7 @@ ctest --test-dir build            # 或直接跑 build\stv3d_*_tests.exe
 | 套件 | 覆盖 | 检查项 |
 |---|---|---|
 | `tests/core_math_test.cpp` | 列主序布局与 `at/column/translation`、乘法与结合、`fromTRS` 的 S→R→T、`lookAt`（含视线与 up 平行退化）、透视投影 **GL[-1,1] 与 Vulkan[0,1]+flipY 两套**、`ortho` 两套、四元数（轴角/复合顺序/共轭/归一化/fromTo/slerp/`fromMat3`↔`toMat3` 一致性）、mat3 逆与行列式、mat4 行列式与逆（含奇异→单位阵） | 67 |
-| `tests/engine_test.cpp` | 摄像机（默认机位、viewMatrix 映射、lookAt、世界/局部旋转、俯仰限位、500 次随机旋转后仍无滚转且正交、moveLocal、**GL/Vulkan 两套投影 + flipY**、fov/aspect 钳制）、模型（S→R→T、`fromTRS` 等价、四元数累积、自转积分、负 dt 不推进）、角色控制器（方向/归一化/疾跑/俯视不出水平面）、角色（TPV 摆放与注视、FPV 眼睛高度与朝向不被覆盖、切模式、轨道限位 ±89°、距离钳制 0.5/100） | 67 |
+| `tests/engine_test.cpp` | 摄像机（默认机位、viewMatrix 映射、lookAt、世界/局部旋转、俯仰限位、500 次随机旋转后仍无滚转且正交、moveLocal、**GL/Vulkan 两套投影 + flipY**、fov/aspect 钳制）、模型（S→R→T、`fromTRS` 等价、四元数累积、自转积分、负 dt 不推进）、角色控制器（方向/归一化/疾跑/俯视不出水平面）、角色（TPV 摆放与注视、FPV 眼睛高度与朝向不被覆盖、切模式、轨道限位 ±89°、距离钳制 0.5/100）、**GameLoop**（固定步长整除、累加器余数、10 秒卡顿只补 5 刻且丢弃积压、pause 停逻辑刻但帧照跑、start 恢复、`enqueue` 只跑一次、三种 scheduler 任务、零/负 dt 不推进、非法参数回退） | 100 |
 | `tests/core_log_test.cpp` | 行格式（`时间戳 [级别] 内容`、逐位校验时间戳）、四个级别的标签、流式拼接（int/`std::string`/bool）、`logFixed`/`logHex` 的精度与状态还原、**4 线程 × 50 行不丢行不串行**、init/shutdown/再 init 的幂等与追加语义、init 之前写 stderr 不丢消息 | 26 |
 
 ### 迁移前的旧测试（已删除，覆盖面对照）
@@ -352,8 +364,8 @@ ctest --test-dir build            # 或直接跑 build\stv3d_*_tests.exe
 |---|---|---|
 | A0 | **回退点**：打 tag `qt-final`（指向最后一个带 Qt 的提交 `145af81`） | ✅ 已完成 |
 | A1 | **自建日志层**：`core/log` 改成 std-only（`LOG_*()` 流式宏 + 原子自旋锁，格式与 Qt 版逐字一致），30+ 调用点全部改完，core 彻底 Qt-free；新增 `core_log` 单测 26 项 | ✅ 已完成 |
-| A2 | **去 Qt 的时间与主循环**：`GameLoop` 改用 `std::chrono::steady_clock` + 回调接口，删掉 `QObject/QTimer/signals/slots`，累加器逻辑保持不变 | ⏭ 下一步 |
-| A3 | **Win32 窗口与输入**：`src/platform/win32/Win32Window`（`CreateWindowEx` + `WndProc` + 键盘/鼠标/滚轮事件）+ `src/app/main.cpp` 裸消息泵；`HWND` 同时是 GL/WGL、`VkSurfaceKHR`、DXGI swapchain 的 native handle | ⏭ |
+| A2 | **去 Qt 的时间与主循环**：`GameLoop` 改用 `std::chrono::steady_clock` + 回调接口（`setTickCallback/setFrameCallback`、`advance()/advanceBy()`），删掉 `QObject/QTimer/signals/slots`，累加器逻辑不变；GameLoop 移入 `stv3d_engine`，新增 33 项单测（engine 套件 67 → 100） | ✅ 已完成 |
+| A3 | **Win32 窗口与输入**：`src/platform/win32/Win32Window`（`CreateWindowEx` + `WndProc` + 键盘/鼠标/滚轮事件）+ `src/app/main.cpp` 裸消息泵（每圈调 `game_loop.advance()`）；`HWND` 同时是 GL/WGL、`VkSurfaceKHR`、DXGI swapchain 的 native handle | ⏭ 下一步 |
 | A4 | **GL 函数加载表 + 去 qrc**：`src/render/gl/GLFunctions`（X-macro 表 + `wglGetProcAddress`，只加载用到的函数），着色器改磁盘/嵌入头；CMake 删掉 Qt/AUTOMOC/qrc/windeployqt → **Qt 归零**，届时做一次画面回归（机位日志 + 像素聚类） | ⏭ |
 | A5 | **抽 `IRenderDevice`**：按"显式帧模型"设计（`BeginFrame/EndFrame`、CommandList、Pipeline、Buffer、Swapchain、`NativeWindowHandle`、`ClipDepth`），GL 后端先实现；顺带把 `render/Mesh` 的 GPU 句柄与 `core/geometry/MeshData` 彻底分离 | ⏭ |
 | A6 | **Vulkan 后端**：`vcpkg install vulkan-headers vulkan-loader glslang`（本机只有运行时 `vulkan-1.dll`，没有头/导入库），构建期用 `glslangValidator` 把 GLSL 编成 SPIR-V | ⏭ |
@@ -371,7 +383,7 @@ ctest --test-dir build            # 或直接跑 build\stv3d_*_tests.exe
 **其他已知边界**
 
 - 角色只有**水平移动**：没有重力、跳跃、碰撞（`InputState.jump` 已接但控制器未实现）
-- `GameLoop` 的 `pause()` / `exit()` 与状态位尚未被应用使用（可接暂停键）
+- `GameLoop` 的 `pause()` / `exit()` 与状态位已由单测覆盖，但应用还没接（可以绑到暂停键上）
 - `nlohmann-json` 已安装但未使用；目前**所有参数仍是代码内常量**，可统一抽成 `config.json`
 - 自由飞行的调试相机已移除（只剩 FPV / TPV）；如需"上帝视角"可加第三个 `CameraView`
 - TPV 俯仰限位为 `[-89°, 89°]`：相机会绕到角色**下方**（当前没有地面，所以不会穿地）

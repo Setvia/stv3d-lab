@@ -6,6 +6,7 @@
 #include <QOpenGLFunctions_4_3_Core>
 #include <QOpenGLWidget>
 #include <QPoint>
+#include <QTimer>
 #include <QWheelEvent>
 
 #include "core/math/vec3.h"
@@ -115,7 +116,8 @@ private:
     Character character;  // character (the camera is attached to it; shared by FPV/TPV)
     CameraView camera_view = CameraView::TPV;
 
-    GameLoop game_loop{this};  // main loop: fixed-step logic ticks + per-frame rendering, replacing the internal QTimer
+    GameLoop game_loop;        // main loop: fixed-step logic ticks + per-frame rendering (Qt-free)
+    QTimer loop_timer{this};   // platform side of the loop: drives game_loop.advance() (Qt until step A3/A4)
 
     // ---- Input state and parameters ----
     CameraInput input;
