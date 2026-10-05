@@ -6,38 +6,40 @@
 #include "game/Character.h"
 #include "game/GameLoop.h"
 #include "game/Model.h"
-#include "render/Mesh.h"
-#include "render/ShaderProgram.h"
-#include "render/gl/GLFunctions.h"
+#include "render/rhi/RenderDevice.h"
 
-#include <memory>
+#include <cstdint>
 #include <string>
 #include <vector>
 
-// The demo scene - what used to be GLWidget, minus the window.
+// The demo scene - what used to be GLWidget, minus the window and minus the graphics API.
 //
-// It owns the GL resources, the model list, the character and the game loop, and it draws exactly
-// one frame when asked. Window, input and context now come from the platform and render layers, so
-// this class only orchestrates. When the RHI lands (step A5) the two GL-typed members below are what
-// gets replaced by an IRenderDevice.
+// It talks to IRenderDevice only: buffers, shaders, a pipeline and a command list. Which API is
+// behind that interface (OpenGL today, Vulkan or D3D11 later) is not visible here, and the CPU-side
+// geometry it uploads comes from core (MeshGen) rather than from a backend-specific mesh class.
 class Sandbox
 {
 public:
     Sandbox();
+    ~Sandbox();
 
-    // Build the shader program and the geometry; requires a current GL context.
-    // `shaderDirectory` is where basic.vert/basic.frag live (the app passes <exe dir>/shaders).
-    bool createResources(GLFunctions &gfx, const std::string &shaderDirectory);
+    Sandbox(const Sandbox &) = delete;
+    Sandbox &operator=(const Sandbox &) = delete;
+
+    // Build the pipeline, the geometry and the constant buffer; requires a device with a swapchain.
+    // `assetDirectory` is where shaders/ lives (the app passes the executable directory).
+    bool createResources(IRenderDevice &device, const std::string &assetDirectory);
+
+    // Release everything the device owns again; call it while the device is still alive
     void releaseResources();
 
-    // Viewport and camera aspect: call once after the context exists and on every resize
-    void resize(int width, int height, GLFunctions &gfx);
+    // Camera aspect only - the viewport belongs to the device's swapchain
+    void resize(int width, int height);
 
-    // One frame of input: view switch, reset, wheel zoom, drag look. The movement keys are read
-    // during the logic tick instead (see updateCharacter).
+    // One frame of input: view switch, reset, wheel zoom, drag look
     void handleInput(const FrameInput &input);
 
-    void render(GLFunctions &gfx);
+    void render(IRenderDevice &device);
 
     GameLoop &getGameLoop() { return game_loop; }
 
@@ -46,21 +48,38 @@ public:
     const std::vector<Model> &getModels() const { return models; }
 
 private:
+    // Geometry as the renderer sees it: a pair of GPU buffers plus how to draw them
+    struct GpuMesh
+    {
+        BufferHandle vertex_buffer = kInvalidHandle;
+        BufferHandle index_buffer = kInvalidHandle;
+        std::uint32_t index_count = 0;
+        IndexFormat index_format = IndexFormat::UInt32;
+    };
+
     void onTick();
     void updateCharacter(float dt);
     void syncCharacterModel();
     void logCameraPositionIfMoved();
+    void drawModel(IRenderDevice &device, ICommandList &commands, const mat4 &view_projection,
+                   const Model &model);
 
     void resetCamera();
     void setCameraView(CameraView view);
 
-    // ---- rendering ----
-    ShaderProgram program;
-    std::vector<std::shared_ptr<Mesh>> meshes;  // owns the geometry (models share one copy)
-    std::vector<Model> models;                  // each element is an independent spinning cube
-    Model character_model;                      // placeholder model for the character
+    // ---- rendering (owned by the device, referenced here) ----
+    IRenderDevice *device = nullptr;
+    PipelineHandle pipeline = kInvalidHandle;
+    ShaderHandle vertex_shader = kInvalidHandle;
+    ShaderHandle fragment_shader = kInvalidHandle;
+    BufferHandle uniform_buffer = kInvalidHandle;
+    std::vector<GpuMesh> meshes;
+    std::uint32_t uniform_buffer_size = 0;
 
     // ---- scene state ----
+    std::vector<Model> models;  // each element is an independent spinning cube
+    Model character_model;      // placeholder model for the character
+
     Character character;  // the camera is attached to the character; FPV and TPV share it
     CameraView camera_view = CameraView::TPV;
     GameLoop game_loop;

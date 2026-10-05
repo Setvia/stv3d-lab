@@ -1,25 +1,30 @@
 #ifndef GAME_MODEL_H
 #define GAME_MODEL_H
 
-#include <memory>
-
 #include "core/math/mat4.h"
 #include "core/math/quat.h"
 #include "core/math/vec3.h"
 
-class Mesh;  // forward declaration: this class only holds a reference to geometry
+#include <cstdint>
 
-// A model instance = a reference to a mesh + its own transform (position/rotation/scale)
-// + an optional spin. Several models can share one mesh (the GPU buffers exist once),
-// while their transforms stay fully independent.
+// Which geometry a model draws: an index into the geometry table owned by the app, which in turn
+// owns the render resources. The engine deliberately does not know how that geometry is stored - CPU
+// MeshData, GPU buffers, an atlas - which is what keeps Camera/Model/Character independent of the
+// render backend (and testable without a device).
+using MeshId = std::uint32_t;
+
+constexpr MeshId kNoMesh = 0xFFFFFFFFu;
+
+// A model instance = a reference to geometry + its own transform (position/rotation/scale) + an
+// optional spin. Several models can share one geometry while their transforms stay independent.
 //
-// Pure math with no Qt and no OpenGL, so it can be unit-tested without a window.
+// Pure math with no Qt, no OpenGL and no device, so it can be unit-tested without a window.
 // The model matrix is always composed as T * R * S (see core/math/conventions.h).
 class Model
 {
 public:
     Model() = default;
-    explicit Model(std::shared_ptr<Mesh> mesh) : mesh(std::move(mesh)) {}
+    explicit Model(MeshId mesh) : mesh(mesh) {}
 
     // ---------- position ----------
     void setPosition(const vec3& position) { this->position = position; }
@@ -39,8 +44,8 @@ public:
     }
     quat getRotation() const { return rotation; }
 
-    // Additional rotation on top of the current one. Post-multiply, so the new rotation
-    // acts in the model's own frame (same convention as quat::operator*).
+    // Additional rotation on top of the current one. Post-multiply, so the new rotation acts in the
+    // model's own frame (same convention as quat::operator*).
     void rotateBy(float degrees, const vec3& axis)
     {
         rotation = quat::fromAxisAngle(axis, degrees * kDegToRad) * rotation;
@@ -69,19 +74,16 @@ public:
         return mat4::fromTRS(position, rotation, scale);
     }
 
-    // ---------- geometry ----------
-    // The method is const but hands out a mutable pointer, following smart-pointer
-    // conventions: drawing a mesh is not a logical modification of the pose.
-    Mesh* getMesh() const { return mesh.get(); }
-    std::shared_ptr<Mesh> getMeshPtr() const { return mesh; }
-    bool hasMesh() const { return mesh != nullptr; }
-    void setMesh(std::shared_ptr<Mesh> mesh) { this->mesh = std::move(mesh); }
+    // ---------- geometry reference ----------
+    MeshId getMesh() const { return mesh; }
+    bool hasMesh() const { return mesh != kNoMesh; }
+    void setMesh(MeshId id) { mesh = id; }
 
 private:
     static constexpr float kPi = 3.14159265358979323846f;
     static constexpr float kDegToRad = kPi / 180.0f;
 
-    std::shared_ptr<Mesh> mesh;
+    MeshId mesh = kNoMesh;
     vec3 position{0.0f, 0.0f, 0.0f};
     quat rotation;  // identity = no rotation
     vec3 scale{1.0f, 1.0f, 1.0f};

@@ -31,6 +31,8 @@ add_library(stv3d_core STATIC
     src/core/core_smoke.cpp
     src/core/log/LogManager.cpp
     src/core/log/LogManager.h
+    src/core/platform/File.cpp
+    src/core/platform/File.h
     src/core/platform/FrameInput.h
     src/core/platform/Key.h
     src/core/platform/NativeWindowHandle.h
@@ -44,6 +46,8 @@ add_library(stv3d_core STATIC
     src/core/geometry/Vertex.h
     src/core/geometry/Triangle.h
     src/core/geometry/MeshData.h
+    src/core/geometry/generator/MeshGen.cpp
+    src/core/geometry/generator/MeshGen.h
 )
 # Logging uses a small atomic spin lock rather than std::mutex, so no pthread symbol is referenced.
 # Reason: the posix thread model makes g++ pass an implicit -lpthread, which on MinGW resolves to the
@@ -77,19 +81,27 @@ add_library(stv3d_platform_win32 STATIC
 # above it inherits the classic `near`/`far`/`min`/`max` macros.
 target_link_libraries(stv3d_platform_win32 PUBLIC stv3d_core PRIVATE user32 gdi32)
 
+# ---- stv3d_render: the RHI, backend-independent ---------------------------
+# Header-only interface target: every backend (gl/, and later vk/ and d3d11/) implements it, and the
+# app links it instead of any particular API.
+add_library(stv3d_render INTERFACE)
+target_link_libraries(stv3d_render INTERFACE stv3d_core)
+target_sources(stv3d_render INTERFACE
+    src/render/rhi/RenderDevice.h
+    src/render/rhi/RenderTypes.h
+)
+
 # ---- stv3d_render_gl: OpenGL 4.3 backend ----------------------------------
 add_library(stv3d_render_gl STATIC
-    src/render/Mesh.cpp
-    src/render/Mesh.h
-    src/render/ShaderProgram.cpp
-    src/render/ShaderProgram.h
     src/render/gl/GLContext.cpp
     src/render/gl/GLContext.h
     src/render/gl/GLFunctions.cpp
     src/render/gl/GLFunctions.h
     src/render/gl/GLFunctions.inc
+    src/render/gl/GLRenderDevice.cpp
+    src/render/gl/GLRenderDevice.h
 )
-target_link_libraries(stv3d_render_gl PUBLIC stv3d_core PRIVATE opengl32 gdi32)
+target_link_libraries(stv3d_render_gl PUBLIC stv3d_render PRIVATE opengl32 gdi32)
 
 # ---- third-party dependencies ---------------------------------------------
 find_package(cpr CONFIG REQUIRED)            # HTTP client (libcurl wrapper)
@@ -105,6 +117,7 @@ target_link_libraries(stv3d-lab PRIVATE
     stv3d_core
     stv3d_engine
     stv3d_platform_win32
+    stv3d_render
     stv3d_render_gl
     cpr::cpr
     nlohmann_json::nlohmann_json
@@ -119,6 +132,11 @@ add_test(NAME core_math COMMAND stv3d_core_tests)
 add_executable(stv3d_engine_tests tests/engine_test.cpp)
 target_link_libraries(stv3d_engine_tests PRIVATE stv3d_engine)
 add_test(NAME engine_scene COMMAND stv3d_engine_tests)
+
+# Geometry generators are pure CPU code: the cube can be checked without a device
+add_executable(stv3d_core_geometry_tests tests/core_geometry_test.cpp)
+target_link_libraries(stv3d_core_geometry_tests PRIVATE stv3d_core)
+add_test(NAME core_geometry COMMAND stv3d_core_geometry_tests)
 
 # The logging test also proves that core/log needs nothing but the standard library
 add_executable(stv3d_core_log_tests tests/core_log_test.cpp)

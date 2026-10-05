@@ -7,7 +7,7 @@ Win32 + OpenGL 4.3 Core 的「全显式」渲染原型 / 迷你引擎雏形。**
 
 - 不用任何图形封装库（既不用 `QOpenGLShaderProgram`/`QOpenGLBuffer`，也不用 GLAD/GLFW），直接调原生 OpenGL 4.3
 - 顶点属性关联显式三步：`glVertexAttribFormat` + `glVertexAttribBinding` + `glBindVertexBuffer`
-- GL 入口点是一张手写表（`render/gl/GLFunctions.inc`，37 个函数），一屏能看完
+- GL 入口点是一张手写表（`render/gl/GLFunctions.inc`，43 个函数），一屏能看完
 - 摄像机朝向用**四元数**，不保存欧拉角，也不保存 `target`/`up`
 - 每个第三方库都在 CMake 里显式 `find_package` + `target_link_libraries`（不靠"顺带带上的 include 路径"）
 - 着色器是真实文件（`shaders/*.vert|frag`），运行期从 exe 旁边的 `shaders/` 读取
@@ -74,8 +74,8 @@ stv3d-lab/
 │   ├─ core/                   ★ 零依赖（无 Qt / 无 GL / 无 OS 头文件，编译期强制，见 §4）
 │   │   ├─ core_smoke.cpp      守卫 TU：core 里一旦出现 Qt/GL/OS include 就编译失败
 │   │   ├─ math/               vec2/vec3/vec4、mat3/mat4、quat、conventions.h
-│   │   ├─ geometry/           Vertex、Triangle、MeshData（纯 CPU 数据）、generator/
-│   │   ├─ platform/           Key、FrameInput、NativeWindowHandle（平台无关值类型）
+│   │   ├─ geometry/           Vertex（唯一顶点格式）、Triangle、MeshData、generator/MeshGen
+│   │   ├─ platform/           Key、FrameInput、NativeWindowHandle、File（纯 std）
 │   │   └─ log/                LogManager：std::ofstream + 原子自旋锁
 │   ├─ game/                   → 目标名 stv3d_engine（物理位置仍在 src/game/）
 │   │   ├─ Camera.h            Camera：位置 + 四元数朝向 + 投影
@@ -86,11 +86,12 @@ stv3d-lab/
 │   ├─ platform/win32/         窗口层
 │   │   ├─ Win32Window.h/.cpp  窗口类 + WndProc + 消息泵 + 输入采集
 │   │   └─ Win32Module.h/.cpp  exe 所在目录/路径（原来靠 QCoreApplication）
-│   ├─ render/                 GPU 侧（当前是 OpenGL 后端）
-│   │   ├─ Mesh.h/.cpp         Mesh：VAO/VBO/EBO + 显式属性绑定（函数表由外部注入）
-│   │   ├─ ShaderProgram.h/.cpp ShaderProgram：编译/链接/uniform 缓存（源码从磁盘读）
+│   ├─ render/                 GPU 侧
+│   │   ├─ rhi/RenderTypes.h   句柄 / 枚举 / 描述结构（backend 无关）
+│   │   ├─ rhi/RenderDevice.h  IRenderDevice + ICommandList（显式帧模型）
 │   │   ├─ gl/GLContext.h/.cpp WGL 上下文：像素格式 + 4.3 core + vsync + SwapBuffers
 │   │   ├─ gl/GLFunctions.h/.cpp + .inc  手写 X-macro 函数表
+│   │   ├─ gl/GLRenderDevice.h/.cpp      IRenderDevice 的 OpenGL 实现
 │   │   └─ resources/          （占位）BufferObject / MeshResource / TextureResource
 │   ├─ physics/                （占位）Collider / RigidBody / PhysicsWorld
 │   ├─ loader/                 （占位）FBXLoader / GLTFLoader
@@ -98,6 +99,7 @@ stv3d-lab/
 ├─ tests/
 │   ├─ core_math_test.cpp      core 数学单测（67 项，纯 g++，无窗口无 GPU）
 │   ├─ core_log_test.cpp       日志单测（26 项，含 4 线程并发写）
+│   ├─ core_geometry_test.cpp  几何生成单测（17 项：索引范围/绕序/尺寸/法线）
 │   └─ engine_test.cpp         engine 单测：摄像机/模型/角色/主循环/输入映射（117 项）
 ├─ .vscode/                    tasks.json（CMake 构建）/ launch.json（gdb）/ c_cpp_properties.json
 ├─ .gitignore                  build/、*.exe、*.dll、*.log 等
@@ -111,28 +113,30 @@ stv3d-lab/
 ```
 stv3d-lab (exe)   src/main.cpp、src/app/Sandbox.*                     ← 组装根
    ├─ stv3d_platform_win32  src/platform/win32/*                  ← 窗口 / 消息泵 / 输入（user32、gdi32）
-   ├─ stv3d_render_gl       src/render/*                          ← OpenGL 后端（opengl32、gdi32）
+   ├─ stv3d_render_gl       src/render/gl/*                       ← OpenGL 后端（opengl32、gdi32）
+   ├─ stv3d_render          src/render/rhi/*                      ← RHI 接口（header-only INTERFACE 目标）
    ├─ stv3d_engine          src/game/{Camera.h,Model.h,Character.*,GameLoop.*,InputMapping.*}
    │                                                              ← 只链 core（无 Qt / 无 GL / 无 OS）
    └─ stv3d_core            src/core/*                            ← 零依赖（无 Qt、无 GL、无 OS 头文件）
-stv3d_core_tests   tests/core_math_test.cpp      ← 只链 stv3d_core
-stv3d_engine_tests tests/engine_test.cpp         ← 只链 stv3d_engine
-stv3d_core_log_tests tests/core_log_test.cpp     ← 只链 stv3d_core
+stv3d_core_tests     tests/core_math_test.cpp      ← 只链 stv3d_core
+stv3d_core_log_tests tests/core_log_test.cpp       ← 只链 stv3d_core
+stv3d_core_geometry_tests tests/core_geometry_test.cpp ← 只链 stv3d_core
+stv3d_engine_tests   tests/engine_test.cpp         ← 只链 stv3d_engine
 ```
 
 ```
 stv3d-lab (exe)  main.cpp：裸消息泵 + 游戏循环
  ├─ Win32Window           窗口类 / WndProc / 消息泵 / 输入采集 → FrameInput（HWND 交给渲染后端）
- ├─ GLContext             WGL：像素格式 + 4.3 core 上下文 + vsync + SwapBuffers
- ├─ GLFunctions           手写 X-macro 函数表（37 个入口点）
- ├─ Sandbox               场景装配 + 输入处理 + 单帧绘制
+ ├─ IRenderDevice         RHI：swapchain / buffer / shader / pipeline / 帧（A5）
+ │    └─ GLRenderDevice   OpenGL 实现：GLContext + GLFunctions + 一个 command list
+ ├─ Sandbox               场景装配 + 输入处理 + 单帧绘制（只认 RHI）
  │    ├─ GameLoop / TaskScheduler   时间：固定步长逻辑刻 + 每帧回调
  │    ├─ InputMapping               按键 → 意图（纯函数，可单测）
  │    ├─ Character                  角色：位置、控制器、摄像机（FPV/TPV 摆放）
  │    │    ├─ CharacterController   输入意图 → 世界位移
  │    │    └─ Camera                位置 + 四元数朝向 + 投影矩阵
- │    ├─ Model → Mesh               场景对象：变换 / 几何
- │    └─ ShaderProgram              着色器：编译链接 + uniform 缓存（源码从磁盘读）
+ │    ├─ Model（按 MeshId 引用几何） 场景对象：变换 / 自转
+ │    └─ MeshGen（core）→ RHI buffer CPU 几何上传（GPU 句柄只存在于 render 层）
  └─ LogManager            基础设施：日志（静态工具类）
 ```
 
@@ -144,14 +148,15 @@ stv3d-lab (exe)  main.cpp：裸消息泵 + 游戏循环
 - 每个 TU 都能被裸编译器单独编过，这就是解耦的证明（不需要 CMake、不需要 Qt、不需要 vcpkg）：
   ```powershell
   $g='D:\MinGW\bin\g++.exe'
-  foreach ($f in 'src/core/core_smoke.cpp','src/core/log/LogManager.cpp','src/game/Character.cpp',
+  foreach ($f in 'src/core/core_smoke.cpp','src/core/log/LogManager.cpp','src/core/platform/File.cpp',
+                 'src/core/geometry/generator/MeshGen.cpp','src/game/Character.cpp',
                  'src/game/GameLoop.cpp','src/game/InputMapping.cpp','src/render/gl/GLFunctions.cpp',
-                 'src/render/gl/GLContext.cpp','src/render/Mesh.cpp','src/render/ShaderProgram.cpp',
+                 'src/render/gl/GLContext.cpp','src/render/gl/GLRenderDevice.cpp','src/app/Sandbox.cpp',
                  'src/platform/win32/Win32Window.cpp','src/platform/win32/Win32Module.cpp') {
     & $g -std=c++17 -c $f -Isrc -o "$env:TEMP\proof.o"
   }
   ```
-  这 11 个文件全部通过 → 全项目没有任何 Qt 残留（`main.cpp` 只多一个 cpr 依赖）
+  这 13 个文件全部通过 → 全项目没有任何 Qt 残留（`main.cpp` 只多一个 cpr 依赖）
 - 单测目标只链 core/engine → 不需要窗口和显卡，`ctest` 0.3 秒跑完三个套件
 - 依赖方向上也做了保护：`Win32Window.h` 刻意**不** include `<windows.h>`（消息处理器用普通整数声明），
   这样 `near`/`far`/`min`/`max` 这类宏不会泄漏进 engine 和 app
@@ -170,14 +175,18 @@ stv3d-lab (exe)  main.cpp：裸消息泵 + 游戏循环
 ## 5. 各类职责与关键接口
 
 ### `Sandbox`（src/app/Sandbox.h/.cpp）
-场景层（原 `GLWidget` 去掉窗口后的部分）。持有着色器程序、网格库、模型列表、角色与主循环。
+场景层（原 `GLWidget` 去掉窗口与图形 API 后的部分）。持有 RHI 资源、模型列表、角色与主循环。
 
-- 生命周期：`createResources(gfx, shaderDirectory)` 建着色器与几何（需要当前上下文）→
-  `resize(w,h,gfx)` 设视口与纵横比 → `handleInput(input)` → `render(gfx)` → `releaseResources()`
+- 生命周期：`createResources(device, exeDir)` 建片元/顶点着色器、pipeline、几何与常量缓冲 →
+  `resize(w,h)` 只改摄像机纵横比 → `handleInput(input)` → `render(device)` → `releaseResources()`
 - 人称：`enum class CameraView { FPV, TPV }`（定义在 src/game/Camera.h），内部 `setCameraView()`
 - 输入：移动意图在逻辑刻里由 `InputMapping::characterInputFromKeys()` 现算；
   `handleInput()` 处理切人称、复位、滚轮（TPV 拉距离 / FPV 变焦）与左键拖拽（FPV 转头 / TPV 轨道）
-- 绘制：`render()` 里 `glClear` → 计算 VP → 对每个模型 `program.setMat4("uMvp", VP * modelMatrix())` + `mesh->draw()`
+- 几何：`MeshGen::makeCube` 产出 `MeshData`，经 `device.createBuffer` 变成一对 GPU buffer；
+  Sandbox 自己维护 `GpuMesh{ vertex_buffer, index_buffer, index_count, index_format }` 列表，
+  模型只记 `MeshId`
+- 绘制：`render()` 里 `clear` → `bindPipeline/bindVertexBuffer/bindIndexBuffer/bindUniformBuffer` →
+  逐模型 `updateBuffer(常量, VP × modelMatrix())` + `drawIndexed()`
 - 机位日志：位置移动 ≥0.5 m 或朝向变化时写一行 `camera[TPV]: eye(...) forward(...)`
 
 ### `Win32Window`（src/platform/win32/Win32Window.h/.cpp）
@@ -195,7 +204,7 @@ stv3d-lab (exe)  main.cpp：裸消息泵 + 游戏循环
   临时窗口取 WGL 扩展 → `wglChoosePixelFormatARB` → `SetPixelFormat`（一窗一次）→
   `wglCreateContextAttribsARB`（4.3 core）→ `makeCurrent` → `wglSwapIntervalEXT`
 - `makeCurrent()` / `swapBuffers()` / `destroy()`；`lastError()` 给日志用
-- `GLFunctions::load()`：把 `GLFunctions.inc` 里列的 37 个入口点全部解析出来；
+- `GLFunctions::load()`：把 `GLFunctions.inc` 里列的 43 个入口点全部解析出来；
   `wglGetProcAddress` 只管 1.1 以上，1.1 的（`glClear`/`glDrawElements`/…）回退到 `GetProcAddress(opengl32.dll, …)`；
   失败时 `missingFunction()` 给出第一个缺的名字
 
@@ -242,28 +251,65 @@ stv3d-lab (exe)  main.cpp：裸消息泵 + 游戏循环
 - TPV 轨道：`orbitCamera(yaw, pitch)`（四元数旋转偏移向量，俯仰限位 `[-89°, 89°]`，见 `Character.cpp` 常量）、
   `setCameraDistance()`（钳制 0.5~100 m）、`getCameraOffset()` / `cameraDistance()`
 
-### `Mesh` / `MeshFactory`（src/render/Mesh.h/.cpp）
-- `struct Vertex { float position[3]; float color[3]; }`（POD，用 `offsetof` 给出属性偏移）
-- `Mesh`：RAII、**禁拷贝、可移动**；`create(vertices, indices)` / `destroy()` / `draw()` /
-  `isValid()` / `getIndexCount()` / `vertexStride()`
-- 属性号常量：`kAttribPos = 0`、`kAttribColor = 1`、`kBindingInterleaved = 0`（与 shader 的 `layout(location=N)` 对应）
-- `MeshFactory::makeCube(vertices, indices, size)`：边长可配的立方体（8 顶点 / 36 索引）
-- 兼容性保护：没有当前 GL 上下文时 `create()` 直接返回并告警（Qt 内部会在空上下文崩溃）
+### `IRenderDevice` / `ICommandList`（src/render/rhi/ → `stv3d_render`，backend 无关）
+应用只跟这一层打交道；具体图形 API 藏在实现里（当前 `GLRenderDevice`）。
 
-### `Model`（src/game/Model.h → `stv3d_engine`，无 Qt）
-- 引用几何：`std::shared_ptr<Mesh>`（多个模型共享一份 VBO/VAO；`Mesh` 只在 render 层，这里只用前置声明）
+| 关注点 | 接口 |
+|---|---|
+| 帧 | `beginFrame()`（取下一张 back buffer + 让设备 current）/ `endFrame()`（提交 + present）/ `waitIdle()` |
+| 命令 | `getCommandList()` → `begin()/end()`、`setViewport`、`clear`、`bindPipeline`、`bindVertexBuffer`、`bindIndexBuffer`、`bindUniformBuffer`、`drawIndexed` |
+| 交换链 | `createSwapchain(SwapchainDesc{ NativeWindowHandle, w, h, vsync })`、`resizeSwapchain`、`destroySwapchain`、`swapchainWidth/Height` |
+| 资源 | `createBuffer/destroyBuffer/updateBuffer`、`createShader/destroyShader`、`createPipeline/destroyPipeline` |
+| 自述 | `backendName()`（写日志用）、`shaderLanguage()`（GLSL / SPIR-V / HLSL，决定应用去读哪个着色器文件）、`lastError()` |
+
+设计要点（这几条决定了它能不能真的换后端）：
+
+- **形状跟最"重"的后端走**：帧是显式获取/提交的，命令只能写在 `begin()/end()` 之间。OpenGL 没有命令缓冲
+  （它本身就是状态机），所以 GL 后端的 command list 是"立刻调用"；但接口按 Vulkan/D3D12 的要求定，
+  否则以后换过去要推翻重来。
+- **资源一律是不透明句柄**（`BufferHandle`/`ShaderHandle`/`PipelineHandle`，0 = 非法），应用拿不到任何 API 对象。
+- **着色器是字节块**：`ShaderDesc{ stage, code, size }`。设备用 `shaderLanguage()` 告诉应用它要哪种方言，
+  所以换后端 = 换着色器文件，而不是改应用代码。
+- **常量走 uniform buffer**（`bindUniformBuffer(buffer, slot)`），不是逐个 uniform：GLSL 用
+  `layout(std140, binding = 0) uniform Scene { mat4 uMvp; };`，同一份块结构 Vulkan 与 D3D11 直接可用。
+- **v1 的已知取舍**：每帧只用一个 command list、一个 VAO、逐 draw 更新同一个常量缓冲。
+  Vulkan/D3D12 下"帧在飞"时不能这样覆写常量，A6/A7 需要换成小环形缓冲或 dynamic offset（代码里有注释标出）。
+
+### `GLRenderDevice`（src/render/gl/GLRenderDevice.h/.cpp）
+RHI 的 OpenGL 4.3 实现：持有一个 `GLContext` + `GLFunctions`，把 RHI 调用翻译成 GL 调用。
+
+| RHI | OpenGL |
+|---|---|
+| `beginFrame` | `makeCurrent` + 按交换链尺寸 `glViewport` + command list begin |
+| `begin()/end()` | 只切一个 recoding 标志（GL 调用立即生效） |
+| `clear` | `glClearColor` + `glDepthMask(true)` + `glClear` |
+| `bindPipeline` | `glUseProgram` + 深度测试/写掩码 + 把顶点布局重新写进 VAO |
+| `bindVertexBuffer` | `glBindVertexBuffer(0, id, 0, stride)`（stride 来自 pipeline） |
+| `bindIndexBuffer` | `glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, id)` |
+| `bindUniformBuffer` | `glBindBufferBase(GL_UNIFORM_BUFFER, slot, id)` |
+| `drawIndexed` | `glDrawElements` |
+| `endFrame` | `SwapBuffers`（vsync 由 `wglSwapIntervalEXT(1)` 限帧） |
+| `waitIdle` | `glFinish` |
+
+另外提供 `functions()`（GL 函数表）与 `reportErrors(stage)`（读一次 `glGetError` 并写日志）两个后门，
+只给组装根和诊断用；应用逻辑不该碰。
+
+### `Model`（src/game/Model.h → `stv3d_engine`，无 Qt / 无 GPU）
 - 变换：`setPosition` / `getPosition()` / `translate`（`vec3`）、`setRotation(quat)` / `getRotation()` /
   `setRotationDegrees(deg, axis)` / `rotateBy`、`setScale` / `setUniformScale` / `getScale()`
 - 自转：`setSpin(degPerSec, axis)` + `updateSpin(dt)`，读回用 `getSpinDegreesPerSecond()` / `getSpinAxis()`
-- 网格引用：`getMesh()`（可写指针）/ `getMeshPtr()`（共享所有权）/ `hasMesh()` / `setMesh()`
+- 几何引用：**`MeshId`（下标）+ `kNoMesh`**，`setMesh(id)` / `getMesh()` / `hasMesh()`。
+  引擎只记"第几份几何"，具体是 CPU 数据还是 GPU buffer 由应用/render 层决定——这正是它能脱离设备单测的原因
 - `modelMatrix()`：`mat4::fromTRS(...)`，顺序固定 **缩放 → 旋转 → 平移**
 
-### `ShaderProgram`（src/render/ShaderProgram.h/.cpp）
-- `createFromFiles(vertPath, fragPath, attributeBindings)`（支持 `:/...` 资源路径）、`createFromSource(...)`
-- `bind()/release()`、`uniformLocation(name)`（查一次后缓存）、`setMat4(const mat4&)/setVec3(const vec3&)/setFloat`
-  —— uniform 接口收 **core 类型**，所以上层（engine）不需要知道背后是哪个图形 API
-- 编译/链接失败把 GL info log 写进日志；`readTextFile()` 为静态工具方法
-- 同样：禁拷贝可移动、无上下文时优雅失败
+### `Vertex` / `MeshData` / `MeshGen`（src/core/geometry/）
+- **`Vertex` 全项目唯一**：`{ vec3 position; vec3 color; vec3 normal; vec2 uv; }`（44 字节，`offsetof` 给出属性偏移）。
+  以前 core 与 render 各有一个同名结构，A5 合并掉了
+- `MeshData{ std::vector<Vertex> vertices; std::vector<std::uint32_t> indices; }`：纯 CPU 数据，
+  带 `empty()` / `triangleCount()` / `clear()`，**不含任何 GPU 句柄**
+- `MeshGen::makeCube(size)`：8 顶点 / 36 索引（12 三角形），六个面统一按"从外面看逆时针"绕序
+  （原来 back/right/top 三个面绕反了，是新的几何单测抓出来的），角点为彩色、法线取角点方向
+- 生成器放 core 的理由：产出物是 `MeshData`，不知道谁会把它传上 GPU，因此可以脱离窗口单测
 
 ### `GameLoop` / `TaskScheduler`（src/game/GameLoop.h/.cpp → `stv3d_engine`，**无 Qt**）
 - `init()/start()/pause()/exit()`、`isActive()`、`getState()`（位标志 `GameLoopFlags`）、`getTickCount()`
@@ -312,7 +358,8 @@ stv3d-lab (exe)  main.cpp：裸消息泵 + 游戏循环
 | `quat.h` | `{w,x,y,z}` 单位四元数：`fromAxisAngle/fromTo`、复合（`(a*b)` 先作用 b）、`conjugate/inverse`、`rotate`、`toMat3`、`slerp`、`dot/normalized` |
 
 ### `core` 几何层（src/core/geometry/，零依赖）
-`Vertex{pos,norm,uv}`、`Triangle`、**`MeshData{vertices, indices}`**（纯 CPU 数据，不含任何 GPU 句柄——GPU 句柄属于 `src/render/`），以及 `generator/` 下的几何生成器占位。
+`Vertex`（唯一顶点格式，见 §5）、`Triangle`、**`MeshData`**（纯 CPU 数据，不含任何 GPU 句柄），
+以及 `generator/MeshGen`（立方体生成器，有单测）。GPU 句柄只存在于 `src/render/`。
 
 ## 6. 每帧数据流
 
@@ -326,12 +373,15 @@ stv3d-lab (exe)  main.cpp：裸消息泵 + 游戏循环
  │                                                        → Character::update(fixedDt)
  │                                                        → 位移 + syncCamera()（按 FPV/TPV 摆放）
  │
- └─ 主循环里直接画：gl_context.makeCurrent() → render() → swapBuffers()
+ └─ 主循环里直接画：device.beginFrame() → sandbox.render(device) → device.endFrame()
+                                                          ├─ ICommandList：clear / bindPipeline /
+                                                          │   bindVertexBuffer / bindIndexBuffer /
+                                                          │   bindUniformBuffer
                                                           ├─ camera = character.getCamera()
                                                           ├─ VP = projectionMatrix() × viewMatrix()
                                                           └─ 对每个模型：
-                                                               program.setMat4("uMvp", VP × modelMatrix())
-                                                               mesh->draw()   // 显式重放绑定 + glDrawElements
+                                                               device.updateBuffer(ubo, VP × modelMatrix())
+                                                               commands.drawIndexed(index_count)
 ```
 
 > `GameLoop` 不持有时钟也不持有定时器：主循环每转一圈就调一次 `advance()`，逻辑刻与帧的节奏由累加器决定，
@@ -365,8 +415,8 @@ stv3d-lab (exe)  main.cpp：裸消息泵 + 游戏循环
 1. **依赖对称**：一个库 = 一次 `find_package` + 一次 `target_link_libraries`
 2. **core / engine 不许碰 Qt / GL / OS 头文件**：`src/core/**` 与 `src/game/**` 里出现 `<Q...>` / `<GL...>` / `<windows.h>` 就是分层破坏（编译期由 `stv3d_core` / `stv3d_engine` 目标挡住）
 3. **数学约定只认 `core/math/conventions.h`**：列主序、弧度、右手系、`T*R*S`、四元数 `{w,x,y,z}`；GL 与 Vulkan 的裁剪空间差异用 `ClipDepth` 参数表达，不要烤进 core
-4. **GL 资源生命周期**：只在上下文有效时创建/销毁（`GLContext::makeCurrent()` 之后；退出时先放资源再销毁上下文）
-5. **GL 句柄类**：RAII、禁拷贝、可移动，且**函数表从外部注入**（`create(GLFunctions&, ...)`），不依赖全局状态
+4. **GPU 资源只通过 `IRenderDevice` 创建/销毁**：拿到的是不透明句柄，销毁前 `waitIdle()`；GL 后端额外要求"上下文 current"（`beginFrame` 之后、`endFrame` 之前最安全）
+5. **应用不许 include 具体后端**：`Sandbox` 只认 `render/rhi/`，唯一写出 `GLRenderDevice` 的地方是 `main.cpp`（A6/A7 加后端时也只改这里）
 6. **顶点属性显式三步**：`glVertexAttribFormat` → `glVertexAttribBinding` → `glBindVertexBuffer`
 7. **朝向用四元数**：不引入欧拉角状态；需要限位就"钳制目标角、只转差值"
 8. **着色器是磁盘上的真实文件**（`shaders/*.vert|frag`，CMake 构建后复制到 exe 旁边）；改 shader 不用重新编译，重启程序即可
@@ -376,7 +426,7 @@ stv3d-lab (exe)  main.cpp：裸消息泵 + 游戏循环
     `getCamera()`、`getMeshPtr()`、`getIndexCount()`），现场算出来的派生量不带 `get`（`forward()`、
     `viewMatrix()`、`cameraDistance()`、`meshCount()`），判定用 `isXxx()` / `hasXxx()`。
     写成员的 setter 用 `setXxx()`，与成员同名时内部显式写 `this->x = x`
-12. **类名不带 `My` 前缀**：`Camera` / `Model` / `Character` / `Mesh` / `ShaderProgram` / `Sandbox` / `LogManager`
+12. **类名不带 `My` 前缀**：`Camera` / `Model` / `Character` / `Sandbox` / `GLRenderDevice` / `LogManager`（RHI 接口另用 `I` 前缀：`IRenderDevice` / `ICommandList`）
 13. **日志一律走 `LOG_*()`**：不要 `printf`/`std::cout`，一条消息就是一行（`\n` 会被折成 `|`），级别用 `DEBUG/INFO/WARN/ERROR/FATAL`；core/engine 里也不许自己和文件、控制台打交道
 14. **平台的脏东西只留在 `src/platform/<os>/`**：`Win32Window.h` 连 `<windows.h>` 都不 include（消息处理器用普通整数声明 + `static_assert` 校验宽度），这样 `near`/`far` 之类宏永远进不了上层
 
@@ -394,6 +444,7 @@ ctest --test-dir build            # 或直接跑 build\stv3d_*_tests.exe
 | `tests/core_math_test.cpp` | 列主序布局与 `at/column/translation`、乘法与结合、`fromTRS` 的 S→R→T、`lookAt`（含视线与 up 平行退化）、透视投影 **GL[-1,1] 与 Vulkan[0,1]+flipY 两套**、`ortho` 两套、四元数（轴角/复合顺序/共轭/归一化/fromTo/slerp/`fromMat3`↔`toMat3` 一致性）、mat3 逆与行列式、mat4 行列式与逆（含奇异→单位阵） | 67 |
 | `tests/engine_test.cpp` | 摄像机（默认机位、viewMatrix 映射、lookAt、世界/局部旋转、俯仰限位、500 次随机旋转后仍无滚转且正交、moveLocal、**GL/Vulkan 两套投影 + flipY**、fov/aspect 钳制）、模型（S→R→T、`fromTRS` 等价、四元数累积、自转积分、负 dt 不推进）、角色控制器（方向/归一化/疾跑/俯视不出水平面）、角色（TPV 摆放与注视、FPV 眼睛高度与朝向不被覆盖、切模式、轨道限位 ±89°、距离钳制 0.5/100）、**GameLoop**（固定步长整除、累加器余数、10 秒卡顿只补 5 刻且丢弃积压、pause 停逻辑刻但帧照跑、start 恢复、`enqueue` 只跑一次、三种 scheduler 任务、零/负 dt 不推进、非法参数回退）、**InputMapping**（空帧无意图、W/↑ 都是前进、SAD+方向键、Space/E 跳跃意图、Shift 疾跑、F5/R/Esc 都是 edge 不粘滞、关闭按钮也算退出、`clearPerFrame` 清每帧量但保留按键与光标） | 117 |
 | `tests/core_log_test.cpp` | 行格式（`时间戳 [级别] 内容`、逐位校验时间戳）、四个级别的标签、流式拼接（int/`std::string`/bool）、`logFixed`/`logHex` 的精度与状态还原、**4 线程 × 50 行不丢行不串行**、init/shutdown/再 init 的幂等与追加语义、init 之前写 stderr 不丢消息 | 26 |
+| `tests/core_geometry_test.cpp` | 顶点格式尺寸（44 字节，即 pipeline 被告知的 stride）、`MeshData` 的 `empty`/`triangleCount`/`clear`、立方体的顶点/索引数、**索引全在范围内**、**无退化三角形**、**12 个面全部朝外（绕序一致）**、尺寸只改位置不改颜色、法线单位长度且朝外 | 17 |
 
 ### 迁移前的旧测试（已删除，覆盖面对照）
 
@@ -423,9 +474,9 @@ ctest --test-dir build            # 或直接跑 build\stv3d_*_tests.exe
 | A2 | **去 Qt 的时间与主循环**：`GameLoop` 改用 `std::chrono::steady_clock` + 回调接口（`setTickCallback/setFrameCallback`、`advance()/advanceBy()`），删掉 `QObject/QTimer/signals/slots`；GameLoop 移入 `stv3d_engine`，新增 33 项单测 | ✅ 已完成 |
 | A3 | **Win32 窗口与输入**：`src/platform/win32/{Win32Window,Win32Module}`（`CreateWindowEx` + `WndProc` + 键盘/鼠标/滚轮 → `FrameInput`）+ `core/platform/{Key,FrameInput,NativeWindowHandle}` + 引擎侧 `InputMapping`（可单测） | ✅ 已完成 |
 | A4 | **GL 上下文 + 函数表 + 去 qrc**：`render/gl/{GLContext,GLFunctions}`（WGL 建 4.3 core、手写 X-macro 表、`wglGetProcAddress` + 1.1 回退）、`Mesh/ShaderProgram` 改为注入函数表、着色器改磁盘文件、CMake 删掉 Qt/AUTOMOC/qrc/windeployqt → **Qt 归零** | ✅ 已完成 |
-| A5 | **抽 `IRenderDevice`**：按"显式帧模型"设计（`BeginFrame/EndFrame`、CommandList、Pipeline、Buffer、Swapchain、`NativeWindowHandle`、`ClipDepth`），GL 后端先实现；顺带把 `render/Mesh` 的 GPU 句柄与 `core/geometry/MeshData` 彻底分离（含清掉 `core/geometry/Mesh.h` 死代码与两个同名 `Vertex`） | ⏭ 下一步 |
-| A6 | **Vulkan 后端**：`vcpkg install vulkan-headers vulkan-loader glslang`（本机只有运行时 `vulkan-1.dll`，没有头/导入库），构建期用 `glslangValidator` 把 GLSL 编成 SPIR-V | ⏭ |
-| A7 | **D3D11 后端**：MinGW 自带 `d3d11/dxgi/d3dcompiler` 头与导入库，HLSL 运行时编译（系统自带 `D3DCompiler_47.dll`）；RHI 保留将来加 D3D12 的位置 | ⏭ |
+| A5 | **抽 `IRenderDevice`**：`render/rhi/{RenderTypes,RenderDevice}` 定义显式帧模型（`beginFrame/endFrame`、`ICommandList`、Pipeline/Buffer/Shader 句柄、Swapchain、`NativeWindowHandle`、`ShaderLanguage`），`render/gl/GLRenderDevice` 先实现；`Sandbox` 只认 RHI；`Model` 改为按 `MeshId` 引用几何；core 合并成唯一 `Vertex` 并新增 `MeshGen`（立方体生成器 + 17 项单测）；删掉 `render/Mesh`、`render/ShaderProgram`、死代码 `core/geometry/Mesh.h` 与三个空占位生成器 | ✅ 已完成 |
+| A6 | **Vulkan 后端**：`vcpkg install vulkan-headers vulkan-loader glslang`（本机只有运行时 `vulkan-1.dll`，没有头/导入库），构建期用 `glslangValidator` 把 GLSL 编成 SPIR-V；`render/vk/VulkanRenderDevice` 实现同一套 RHI | ⏭ 下一步 |
+| A7 | **D3D11 后端**：MinGW 自带 `d3d11/dxgi/d3dcompiler` 头与导入库，HLSL 运行时编译（系统自带 `D3DCompiler_47.dll`）；`render/d3d11/D3D11RenderDevice`；RHI 保留将来加 D3D12 的位置 | ⏭ |
 
 **已完成的 Qt 阶段（历史）**
 
@@ -443,11 +494,14 @@ ctest --test-dir build            # 或直接跑 build\stv3d_*_tests.exe
 - `nlohmann-json` 已安装但未使用；目前**所有参数仍是代码内常量**，可统一抽成 `config.json`
 - 自由飞行的调试相机已移除（只剩 FPV / TPV）；如需"上帝视角"可加第三个 `CameraView`
 - TPV 俯仰限位为 `[-89°, 89°]`：相机会绕到角色**下方**（当前没有地面，所以不会穿地）
-- 网格只有立方体一种；`MeshFactory` 可继续加球/平面，或写 OBJ 读取器
+- 网格只有立方体一种；`MeshGen` 可继续加球/平面，或写 OBJ 读取器
+- **立方体绕序是 A5 才修好的**：原来 back/right/top 三个面的三角形绕反了（没开背面剔除所以看不出来），
+  新的几何单测把它们抓了出来；现在六个面统一 CCW 朝外，将来开 `GL_CULL_FACE` 可以直接用
+- **RHI v1 的取舍**：逐 draw 覆写同一个常量缓冲 —— GL 下没问题（调用立即生效），但 Vulkan/D3D12 的
+  "帧在飞"模型下不行，A6/A7 要换成环形缓冲或 dynamic offset（`Sandbox::drawModel` 里有注释标注）
+- `PipelineDesc` 目前只有深度测试/写掩码，没有剔除模式、混合、多渲染目标——按需再加，不要预先设计
 - `src/core/geometry/generator/VertexGen.h` 里的 `void VertexGen()` 仍是空壳
-- **两处待清理的重复**：`src/core/geometry/Mesh.h` 是重构前的死代码（把 GPU 句柄留在了 core 层，
-  没人 include），应删掉或改成纯数据；另外 `Vertex` 这个名字同时被 `core/geometry/Vertex.h`
-  （`pos/norm/uv`）与 `render/Mesh.h`（`position/color`）使用，等 A5 抽 RHI 时统一掉
+- **注释语言**：源码注释与日志文案已统一为英文；本 README 按你的要求保持中文
 - 阴影、光照、纹理、实例化（`glDrawElementsInstanced`）都还没做
 - **拖拽时的光标反馈没有了**：Qt 版拖拽会切 `ClosedHandCursor`，现在只做了 `SetCapture`（要补就是 `Win32Window::setDraggingCursor()`）
 - **`main.cpp` 里那个 httpbin 请求**是 Qt 时代留下的 cpr 依赖自检，会阻塞启动约 1 秒直到超时/返回；不需要的话可以删

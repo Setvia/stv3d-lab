@@ -1,4 +1,4 @@
-#version 330 core
+#version 430 core
 
 // Output the interpolated vertex color directly (no lighting or textures yet)
 in vec3 vColor;

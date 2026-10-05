@@ -4,16 +4,16 @@
 #include "game/InputMapping.h"
 #include "platform/win32/Win32Module.h"
 #include "platform/win32/Win32Window.h"
-#include "render/gl/GLContext.h"
-#include "render/gl/GLFunctions.h"
+#include "render/gl/GLRenderDevice.h"
+#include "render/rhi/RenderDevice.h"
 
 #include <cpr/cpr.h>
 
 // stv3d-lab entry point.
 //
-// No Qt and no hidden event loop: this is a plain main() that owns the window, the GL context and
-// the message pump, and drives the game loop itself. The shape of it is exactly what a Vulkan or
-// D3D11 backend will slot into - only the render calls change.
+// A plain main(): log, window, render device, scene, then pump/input/advance/render/present. The only
+// line that names a graphics API is the concrete device below - everything else talks to
+// IRenderDevice, which is what makes the Vulkan (A6) and D3D11 (A7) backends a local change.
 int main()
 {
     // ---- logging first: every later step wants to report somewhere ----
@@ -36,49 +36,54 @@ int main()
         return 1;
     }
 
-    // ---- OpenGL 4.3 core context and its function table ----
-    // The renderer needs glVertexAttribFormat / glVertexAttribBinding / glBindVertexBuffer, which
-    // only entered the core profile in OpenGL 4.3, so the context is requested explicitly.
-    const GLContext::Config context_config;  // 4.3 core, 24-bit depth, 4x MSAA, vsync
-    GLContext gl_context;
-    if (!gl_context.create(window.nativeHandle(), context_config)) {
-        LOG_ERROR() << "OpenGL context creation failed: " << gl_context.lastError();
+    // ---- render device ----
+    GLRenderDevice gl_device;      // the backend choice lives exactly here
+    IRenderDevice &device = gl_device;
+
+    if (!gl_device.create(window.nativeHandle())) {
+        LOG_ERROR() << "render device creation failed: " << device.lastError();
         window.destroy();
         LogManager::shutdown();
         return 1;
     }
 
-    GLFunctions gfx;
-    if (!gfx.load()) {
-        LOG_ERROR() << "OpenGL function missing (context too old for 4.3 core): " << gfx.missingFunction();
-        gl_context.destroy();
+    SwapchainDesc swapchain_desc;
+    swapchain_desc.window = window.nativeHandle();
+    swapchain_desc.width = static_cast<std::uint32_t>(window.clientWidth());
+    swapchain_desc.height = static_cast<std::uint32_t>(window.clientHeight());
+    swapchain_desc.vsync = true;
+
+    if (!device.createSwapchain(swapchain_desc)) {
+        LOG_ERROR() << "swapchain creation failed: " << device.lastError();
+        gl_device.destroy();
         window.destroy();
         LogManager::shutdown();
         return 1;
     }
 
-    GLint profile_mask = 0;
-    gfx.glGetIntegerv(GL_CONTEXT_PROFILE_MASK, &profile_mask);
-    LOG_INFO() << "GL context: " << context_config.major << "." << context_config.minor
-               << " | core profile: " << ((profile_mask & GL_CONTEXT_CORE_PROFILE_BIT) != 0)
-               << " | GL_VERSION: " << reinterpret_cast<const char *>(gfx.glGetString(GL_VERSION))
-               << " | GPU: " << reinterpret_cast<const char *>(gfx.glGetString(GL_RENDERER));
+    const char *dialect = "unknown";
+    switch (device.shaderLanguage()) {
+        case ShaderLanguage::GLSLSource: dialect = "GLSL"; break;
+        case ShaderLanguage::SPIRV:      dialect = "SPIR-V"; break;
+        case ShaderLanguage::HLSLSource: dialect = "HLSL"; break;
+    }
+    LOG_INFO() << "render backend: " << device.backendName() << " | shaders: " << dialect
+               << " | swapchain: " << device.swapchainWidth() << "x" << device.swapchainHeight();
 
     // ---- scene ----
     Sandbox sandbox;
-    if (!sandbox.createResources(gfx, exe_directory + "/shaders")) {
+    if (!sandbox.createResources(device, exe_directory)) {
         LOG_ERROR() << "scene creation failed";
-        gl_context.destroy();
+        device.destroySwapchain();
+        gl_device.destroy();
         window.destroy();
         LogManager::shutdown();
         return 1;
     }
-    sandbox.resize(window.clientWidth(), window.clientHeight(), gfx);
+    sandbox.resize(window.clientWidth(), window.clientHeight());
 
-    const GLenum init_error = gfx.glGetError();
-    if (init_error != GL_NO_ERROR) {
-        LOG_WARNING() << "GL error after initialization, code = " << logHex(init_error, 4);
-    }
+    // Backend-specific diagnostics after the first resources exist (the GL backend reads glGetError)
+    gl_device.reportErrors("after scene creation");
 
     // Network request test (kept from the Qt era: it only proves the cpr dependency works)
     const cpr::Response response = cpr::Get(cpr::Url{"https://httpbin.org/get"});
@@ -86,9 +91,9 @@ int main()
     LOG_INFO() << "Content: " << response.text;
 
     // ---- main loop ----
-    // One turn = pump the window messages, apply input, advance the game loop (which runs the fixed
-    // logic ticks), then draw and present. SwapBuffers with vsync caps the frame rate; the logic
-    // ticks stay on their own fixed 1/60 s step.
+    // One turn: pump the window messages, apply input, advance the game loop (fixed logic ticks),
+    // then record and submit one frame. vsync in endFrame() caps the frame rate; the logic ticks stay
+    // on their own fixed 1/60 s step.
     while (window.pumpMessages()) {
         const FrameInput &input = window.input();
 
@@ -99,22 +104,25 @@ int main()
         sandbox.handleInput(input);
 
         if (input.resized) {
-            sandbox.resize(window.clientWidth(), window.clientHeight(), gfx);
+            device.resizeSwapchain(static_cast<std::uint32_t>(window.clientWidth()),
+                                   static_cast<std::uint32_t>(window.clientHeight()));
+            sandbox.resize(window.clientWidth(), window.clientHeight());
         }
 
         sandbox.getGameLoop().advance();
 
-        gl_context.makeCurrent();
-        sandbox.render(gfx);
-        gl_context.swapBuffers();
+        device.beginFrame();
+        sandbox.render(device);
+        device.endFrame();
 
         window.endFrame();
     }
 
-    // ---- shutdown: GL objects must die while the context is still current ----
-    gl_context.makeCurrent();
+    // ---- shutdown: GPU work first, then resources, then the device and the window ----
+    device.waitIdle();
     sandbox.releaseResources();
-    gl_context.destroy();
+    device.destroySwapchain();
+    gl_device.destroy();
     window.destroy();
 
     LOG_INFO() << "===== stv3d-lab exit, code = 0 =====";

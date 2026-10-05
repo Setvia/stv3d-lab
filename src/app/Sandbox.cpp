@@ -1,50 +1,126 @@
-#include "Sandbox.h"
+#include "app/Sandbox.h"
 
+#include "core/geometry/generator/MeshGen.h"
 #include "core/log/LogManager.h"
+#include "core/platform/File.h"
 #include "game/InputMapping.h"
 
-#include <utility>
+#include <cstddef>
 
 Sandbox::Sandbox()
 {
-    // Logic ticks and frames are callbacks now: the platform pump calls game_loop.advance(),
-    // which lands here. A tick updates the world, a frame draws it (see main.cpp).
+    // Logic ticks are a callback now: the platform pump calls game_loop.advance(), which lands here
     game_loop.setTickCallback([this](std::uint64_t) { onTick(); });
+}
+
+Sandbox::~Sandbox()
+{
+    // releaseResources() is an explicit step because the device (and its context) must still be alive;
+    // forgetting it here only leaks, it does not crash, which is why the app calls it.
 }
 
 // ---------------- resources ----------------
 
-bool Sandbox::createResources(GLFunctions &gfx, const std::string &shaderDirectory)
+bool Sandbox::createResources(IRenderDevice &device, const std::string &assetDirectory)
 {
-    // (0) Fixed pipeline state: the same clear colour and depth test the Qt version used
-    gfx.glClearColor(0.1f, 0.12f, 0.15f, 0.1f);
-    gfx.glEnable(GL_DEPTH_TEST);
+    this->device = &device;
 
-    // (1) Shader program: one program shared by every model
-    const std::string vertex_path = shaderDirectory + "/basic.vert";
-    const std::string fragment_path = shaderDirectory + "/basic.frag";
-    const bool shader_ok = program.createFromFiles(gfx, vertex_path, fragment_path,
-                                                   // explicit attribute indices (the constants live in Mesh)
-                                                   {{Mesh::kAttribPos, "aPos"}, {Mesh::kAttribColor, "aColor"}});
-    if (!shader_ok) {
-        LOG_ERROR() << "shader program creation failed; models cannot be drawn";
+    // (1) Shaders.
+    // The device says which dialect it wants, so a backend switch means loading different files
+    // rather than editing this code. Only GLSL exists today; the SPIR-V (A6) and HLSL (A7) branches
+    // plug in here.
+    if (device.shaderLanguage() != ShaderLanguage::GLSLSource) {
+        LOG_ERROR() << "this backend's shader dialect is not implemented yet: " << device.backendName();
         return false;
     }
 
-    // (2) Geometry: the cube is uploaded once and shared by all models
-    std::vector<Vertex> vertices;
-    std::vector<GLuint> indices;
-    MeshFactory::makeCube(vertices, indices, 1.0f);
-
-    auto cube_mesh = std::make_shared<Mesh>();
-    cube_mesh->create(gfx, vertices, indices);
-    if (!cube_mesh->isValid()) {
-        LOG_ERROR() << "cube mesh creation failed";
+    std::string vertex_source;
+    std::string fragment_source;
+    const std::string shader_directory = assetDirectory + "/shaders";
+    if (!File::readTextFile(shader_directory + "/basic.vert", vertex_source)
+        || !File::readTextFile(shader_directory + "/basic.frag", fragment_source)) {
         return false;
     }
-    meshes.push_back(cube_mesh);
 
-    // (3) Models: three independent spinning cubes plus the character placeholder
+    ShaderDesc vertex_desc;
+    vertex_desc.stage = ShaderStage::Vertex;
+    vertex_desc.code = vertex_source.data();
+    vertex_desc.size = vertex_source.size();
+    vertex_desc.debug_name = "basic.vert";
+    vertex_shader = device.createShader(vertex_desc);
+
+    ShaderDesc fragment_desc;
+    fragment_desc.stage = ShaderStage::Fragment;
+    fragment_desc.code = fragment_source.data();
+    fragment_desc.size = fragment_source.size();
+    fragment_desc.debug_name = "basic.frag";
+    fragment_shader = device.createShader(fragment_desc);
+
+    if (vertex_shader == kInvalidHandle || fragment_shader == kInvalidHandle) {
+        LOG_ERROR() << "shader creation failed: " << device.lastError();
+        return false;
+    }
+
+    // (2) Pipeline: attribute locations and the vertex stride are described explicitly; the layout is
+    // what core::Vertex actually contains (position at 0, color at 1).
+    const VertexAttribute attributes[] = {
+        {0, VertexFormat::Float32x3, static_cast<std::uint32_t>(offsetof(Vertex, position))},
+        {1, VertexFormat::Float32x3, static_cast<std::uint32_t>(offsetof(Vertex, color))},
+    };
+
+    PipelineDesc pipeline_desc;
+    pipeline_desc.vertex_shader = vertex_shader;
+    pipeline_desc.fragment_shader = fragment_shader;
+    pipeline_desc.attributes = attributes;
+    pipeline_desc.attribute_count = 2;
+    pipeline_desc.vertex_stride = static_cast<std::uint32_t>(sizeof(Vertex));
+    pipeline_desc.topology = PrimitiveTopology::TriangleList;
+    pipeline_desc.depth_test = true;
+    pipeline_desc.depth_write = true;
+    pipeline = device.createPipeline(pipeline_desc);
+    if (pipeline == kInvalidHandle) {
+        LOG_ERROR() << "pipeline creation failed: " << device.lastError();
+        return false;
+    }
+
+    // (3) Geometry: CPU-side MeshData from core, uploaded through the device
+    const MeshData cube = MeshGen::makeCube(1.0f);
+
+    BufferDesc vertex_buffer_desc;
+    vertex_buffer_desc.size = static_cast<std::uint32_t>(cube.vertices.size() * sizeof(Vertex));
+    vertex_buffer_desc.usage = BufferUsage::Vertex;
+    vertex_buffer_desc.initial_data = cube.vertices.data();
+
+    BufferDesc index_buffer_desc;
+    index_buffer_desc.size = static_cast<std::uint32_t>(cube.indices.size() * sizeof(std::uint32_t));
+    index_buffer_desc.usage = BufferUsage::Index;
+    index_buffer_desc.initial_data = cube.indices.data();
+
+    GpuMesh mesh;
+    mesh.vertex_buffer = device.createBuffer(vertex_buffer_desc);
+    mesh.index_buffer = device.createBuffer(index_buffer_desc);
+    mesh.index_count = static_cast<std::uint32_t>(cube.indices.size());
+    mesh.index_format = IndexFormat::UInt32;
+    if (mesh.vertex_buffer == kInvalidHandle || mesh.index_buffer == kInvalidHandle) {
+        LOG_ERROR() << "geometry upload failed: " << device.lastError();
+        return false;
+    }
+    meshes.push_back(mesh);
+    const MeshId cube_mesh = 0;
+
+    // (4) Constant buffer for the per-draw matrix (std140, slot 0 in the shader)
+    uniform_buffer_size = static_cast<std::uint32_t>(sizeof(mat4));
+    BufferDesc uniform_buffer_desc;
+    uniform_buffer_desc.size = uniform_buffer_size;
+    uniform_buffer_desc.usage = BufferUsage::Uniform;
+    uniform_buffer_desc.initial_data = nullptr;  // filled per draw
+    uniform_buffer = device.createBuffer(uniform_buffer_desc);
+    if (uniform_buffer == kInvalidHandle) {
+        LOG_ERROR() << "constant buffer creation failed: " << device.lastError();
+        return false;
+    }
+
+    // (5) Models: three spinning cubes plus the character placeholder, all sharing one geometry
     struct ModelSpec
     {
         vec3 position;
@@ -60,11 +136,11 @@ bool Sandbox::createResources(GLFunctions &gfx, const std::string &shaderDirecto
     };
 
     for (const ModelSpec &spec : specs) {
-        Model model(cube_mesh);  // * shares the same mesh
+        Model model(cube_mesh);
         model.setPosition(spec.position);
         model.setUniformScale(spec.scale);
         model.setSpin(spec.spin_degrees_per_second, spec.spin_axis);
-        models.push_back(std::move(model));
+        models.push_back(model);
     }
 
     character_model = Model(cube_mesh);
@@ -72,7 +148,8 @@ bool Sandbox::createResources(GLFunctions &gfx, const std::string &shaderDirecto
     character_model.setSpin(0.0f);  // the character does not spin
     syncCharacterModel();
 
-    LOG_INFO() << "scene: " << meshes.size() << " mesh(es), " << (models.size() + 1) << " model(s)";
+    LOG_INFO() << "scene: " << meshes.size() << " mesh(es), " << (models.size() + 1) << " model(s)"
+               << " | backend: " << device.backendName();
 
     game_loop.init();
     game_loop.start();
@@ -85,20 +162,44 @@ bool Sandbox::createResources(GLFunctions &gfx, const std::string &shaderDirecto
 
 void Sandbox::releaseResources()
 {
-    // Mesh and ShaderProgram delete their GL objects in the destructor, so clearing is enough.
-    // The context must still be current here.
-    models.clear();
+    if (device == nullptr) {
+        return;
+    }
+
+    for (const GpuMesh &mesh : meshes) {
+        device->destroyBuffer(mesh.vertex_buffer);
+        device->destroyBuffer(mesh.index_buffer);
+    }
     meshes.clear();
-    program.destroy();
+
+    if (uniform_buffer != kInvalidHandle) {
+        device->destroyBuffer(uniform_buffer);
+        uniform_buffer = kInvalidHandle;
+    }
+    if (pipeline != kInvalidHandle) {
+        device->destroyPipeline(pipeline);
+        pipeline = kInvalidHandle;
+    }
+    if (vertex_shader != kInvalidHandle) {
+        device->destroyShader(vertex_shader);
+        vertex_shader = kInvalidHandle;
+    }
+    if (fragment_shader != kInvalidHandle) {
+        device->destroyShader(fragment_shader);
+        fragment_shader = kInvalidHandle;
+    }
+
+    models.clear();
+    device = nullptr;
 }
 
 // ---------------- per frame ----------------
 
-void Sandbox::resize(int width, int height, GLFunctions &gfx)
+void Sandbox::resize(int width, int height)
 {
-    gfx.glViewport(0, 0, width, height);
-    // Only the aspect ratio is handed to the camera; fov / near / far stay with the camera
-    character.getCamera().setViewportAspect(height > 0 ? static_cast<float>(width) / static_cast<float>(height) : 1.0f);
+    // Only the aspect ratio is handed to the camera; fov / near / far stay with the camera itself
+    character.getCamera().setViewportAspect(height > 0 ? static_cast<float>(width) / static_cast<float>(height)
+                                                       : 1.0f);
 }
 
 void Sandbox::handleInput(const FrameInput &input)
@@ -130,42 +231,48 @@ void Sandbox::handleInput(const FrameInput &input)
         const float dy = static_cast<float>(input.mouse_delta_y) * orbit_speed;
 
         if (camera_view == CameraView::FPV) {
-            // First person: drag right turns the view right, drag down looks down.
-            // Pitch clamping happens inside Camera::yawPitch (no Euler angles are stored)
             character.getCamera().yawPitch(-dx, -dy);
         } else {
-            // Third person: drag right swings the camera left, drag down raises it
-            // ("grab and drag the character" feel)
             character.orbitCamera(-dx, dy);
         }
         logCameraPositionIfMoved();
     }
 }
 
-void Sandbox::render(GLFunctions &gfx)
+void Sandbox::drawModel(IRenderDevice &device, ICommandList &commands, const mat4 &view_projection,
+                        const Model &model)
 {
-    gfx.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    if (!model.hasMesh() || model.getMesh() >= meshes.size()) {
+        return;
+    }
+
+    // One constant buffer per draw. Note for the Vulkan/D3D12 backends: a frame in flight must not
+    // overwrite constants the GPU may still be reading, so A6/A7 will need a small ring of buffers
+    // here (or dynamic offsets) instead of updating one buffer between draws.
+    const mat4 mvp = view_projection * model.modelMatrix();
+    device.updateBuffer(uniform_buffer, &mvp, uniform_buffer_size, 0);
+
+    commands.drawIndexed(meshes[model.getMesh()].index_count);
+}
+
+void Sandbox::render(IRenderDevice &device)
+{
+    ICommandList &commands = device.getCommandList();
+
+    commands.clear(0.1f, 0.12f, 0.15f, 0.1f, 1.0f);
+
+    commands.bindPipeline(pipeline);
+    commands.bindVertexBuffer(meshes.empty() ? kInvalidHandle : meshes[0].vertex_buffer);
+    commands.bindIndexBuffer(meshes.empty() ? kInvalidHandle : meshes[0].index_buffer, IndexFormat::UInt32);
+    commands.bindUniformBuffer(uniform_buffer, 0);
 
     const Camera &camera = character.getCamera();
     const mat4 view_projection = camera.projectionMatrix() * camera.viewMatrix();
 
-    program.bind();  // all models share the same shader program
-
     for (const Model &model : models) {
-        Mesh *mesh = model.getMesh();
-        if (mesh == nullptr || !mesh->isValid()) {
-            continue;
-        }
-        // Each model has its own model matrix, so the uniform is rewritten per model
-        // (the uniform location itself is cached by ShaderProgram)
-        program.setMat4("uMvp", view_projection * model.modelMatrix());
-        mesh->draw();
+        drawModel(device, commands, view_projection, model);
     }
-
-    if (character_model.getMesh() != nullptr && character_model.getMesh()->isValid()) {
-        program.setMat4("uMvp", view_projection * character_model.modelMatrix());
-        character_model.getMesh()->draw();
-    }
+    drawModel(device, commands, view_projection, character_model);
 }
 
 // ---------------- logic ----------------
@@ -179,8 +286,6 @@ void Sandbox::onTick()
         model.updateSpin(dt);
     }
 
-    // Both view modes drive the camera through the character: FPV places it at the eyes, TPV at the
-    // orbit offset
     updateCharacter(dt);
 }
 
@@ -218,8 +323,8 @@ void Sandbox::setCameraView(CameraView view)
     }
 
     camera_view = view;
-    character.setView(view);         // the character repositions the camera for the new mode
-    frame_input.clearPerFrame();     // avoids "stuck keys" at the moment of switching
+    character.setView(view);      // the character repositions the camera for the new mode
+    frame_input.clearPerFrame();  // avoids "stuck keys" at the moment of switching
 
     LOG_INFO() << "camera view: " << (camera_view == CameraView::FPV ? "FPV" : "TPV");
     logCameraPositionIfMoved();
