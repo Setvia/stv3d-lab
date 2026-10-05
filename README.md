@@ -21,11 +21,11 @@ Win32 + OpenGL 4.3 Core 的「全显式」渲染原型 / 迷你引擎雏形。**
 | 编译器 | MinGW-w64 g++ **13.2.0**（`D:\MinGW`），CMake 4.1.1 |
 | vcpkg | `D:\git\repos\vcpkg`，triplet **`x64-mingw-dynamic`** |
 | vcpkg 包 | `cpr`（HTTP）、`nlohmann-json`（JSON，待用）、`vulkan-headers`、`vulkan-loader`、`glslang[tools]`（GLSL→SPIR-V） |
-| 系统库 | `user32` `gdi32` `opengl32`（MinGW 自带，含 `GL/glcorearb.h`、`GL/wglext.h`）；Vulkan 运行时 `vulkan-1.dll`（显卡驱动自带） |
-| 显卡 | 本机两块：OpenGL 走 Intel UHD 630（驱动 4.3.0），Vulkan 后端优先选**独显** GeForce GTX 1050 Ti（Vulkan 1.2） |
+| 系统库 | OpenGL：`opengl32` + `GL/glcorearb.h`、`GL/wglext.h`（MinGW 自带）；Vulkan：`vulkan-1.dll`（显卡驱动自带）；D3D11：`d3d11` `dxgi` `d3dcompiler`（MinGW 导入库 + 系统 `D3DCompiler_47.dll`） |
+| 显卡 | 本机两块：OpenGL 与 D3D11 走 Intel UHD 630，Vulkan 后端优先选**独显** GeForce GTX 1050 Ti（Vulkan 1.2） |
 
 > Qt 已经**不是**依赖了：`find_package(Qt6)`、AUTOMOC/AUTORCC、`.qrc`、`windeployqt` 全部移除。
-> 现在 exe 只依赖 `libcpr.dll`、`vulkan-1.dll`（Vulkan 后端）与系统库——`objdump -p` 可直接验证。
+> 现在 exe 只依赖 `libcpr.dll`、三个图形 API 的系统 DLL 与系统库——`objdump -p` 可直接验证。
 
 > Vulkan 的三件依赖这样装（本机没有 Vulkan SDK）：
 > ```powershell
@@ -44,11 +44,13 @@ cmake --preset mingw            # 配置（preset 内含编译器、vcpkg toolch
 cmake --build --preset mingw    # 构建 → build\stv3d-lab.exe（顺便把 GLSL 编成 SPIR-V）
 .\build\stv3d-lab.exe                # 运行（默认 OpenGL 后端）
 .\build\stv3d-lab.exe --api vk       # 运行（Vulkan 后端）
+.\build\stv3d-lab.exe --api d3d11    # 运行（Direct3D 11 后端）
 ```
 
-- **后端由命令行选**：`--api gl`（默认）/ `--api vk`。选择只发生在 `src/main.cpp`，其余代码只认 `IRenderDevice`
-- 构建期会调 `glslangValidator -V` 把 `shaders/basic.{vert,frag}` 编成 `basic.*.spv`，
-  和 GLSL 源文件一起复制到 exe 旁边的 `shaders/`（两个后端共用同一份着色器源码）
+- **后端由命令行选**：`--api gl`（默认）/ `vk` / `d3d11`。选择只发生在 `src/main.cpp`，其余代码只认 `IRenderDevice`
+- 着色器一份源码三用：GLSL 由 GL 直接编译、构建期用 `glslangValidator -V` 出 SPIR-V 给 Vulkan、
+  HLSL 由 D3D11 在**运行期**用 `D3DCompile` 编译（系统自带 `D3DCompiler_47.dll`，无需构建步骤）
+- 资源（`shaders/` 与 SPIR-V）由 `stv3d-assets` 目标**每次构建都同步**，所以改 shader 不必等 exe 重新链接
 
 - VS Code：**F5** = 配置 + 构建 + 调试（`.vscode/tasks.json`、`launch.json` 已接好）；**Ctrl+Shift+B** 只构建
 - `build\` 是**自足目录**：构建后自动把 vcpkg 运行时 DLL 与 `shaders/` 放到 exe 旁边，双击即可跑
@@ -69,6 +71,9 @@ cmake --build --preset mingw    # 构建 → build\stv3d-lab.exe（顺便把 GLS
 | 结构体成员名 `near` / `far` 编译报奇怪的错 | `<windows.h>` 把它们定义成**宏**，只能叫 `near_plane` / `far_plane`（也正因如此，`Win32Window.h` 刻意不 include `<windows.h>`） |
 | 用 PowerShell 截图验证渲染时画面全黑/被切 | 三件事一起做才对：① 先 `SetProcessDPIAware()`（否则拿到的是虚拟像素）；② 把窗口 `SetWindowPos(HWND_TOPMOST)` 置顶（否则抓到的是压在上面的别的窗口）；③ 用 `ClientToScreen` 算出客户区物理坐标再 `CopyFromScreen`。`PrintWindow` 抓不到 GL 区域 |
 | `Select-Object -First N` 之后构建/gdb 莫名其妙 exit 1 | PowerShell 提前关管道会**掐死上游进程**，别看被截断的输出，改用 `*> build\build.log` 落盘再读 |
+| D3D11：清屏正常、几何完全不出现，且没有任何 API 报错 | 两件事叠在一起：① `D3D11_MAP_WRITE_NO_OVERWRITE` **只对 vertex/index buffer 有效**，常量缓冲必须用 `WRITE_DISCARD`（用它覆写会静默丢掉写入）；② 退一步用 `ID3D11DeviceContext1::*SetConstantBuffers1` 做范围绑定时，本机 Intel 驱动**静默给错数据**。最终方案：每个常量块一个小缓冲 + 经典 `VSSetConstantBuffers` |
+| 改了 shader 但运行结果没变 | `POST_BUILD` 只在目标重新链接时才跑；改成 always-run 的 `stv3d-assets` 目标后，每次构建都会同步 `shaders/` 与 SPIR-V |
+| D3D11 调试层用不了 | 本机没装 `d3d11sdklayers.dll`（Windows 可选功能 Graphics Tools），`D3D11_CREATE_DEVICE_DEBUG` 会失败；这种时候用"二分诊断"（绕过常量缓冲 / 临时整块绑定）比等工具更快 |
 
 ## 3. 目录结构
 
@@ -77,8 +82,9 @@ stv3d-lab/
 ├─ CMakeLists.txt              分层目标（见 §4）+ 着色器/vcpkg 运行时部署
 ├─ CMakePresets.json           mingw preset（编译器 / vcpkg toolchain / triplet / Debug）
 ├─ shaders/
-│   ├─ basic.vert              顶点着色器（属性号与 Mesh 的常量一致）
-│   └─ basic.frag              片元着色器
+│   ├─ basic.vert              顶点着色器（GLSL，Vulkan 用的 SPIR-V 由它生成）
+│   ├─ basic.frag              片元着色器
+│   └─ basic.hlsl              D3D11 用（一份文件两个入口：VSMain / PSMain）
 ├─ src/
 │   ├─ main.cpp                入口：日志 → Win32 窗口 → WGL 上下文 → 函数表 → 场景 → 裸消息泵
 │   ├─ app/
@@ -105,6 +111,7 @@ stv3d-lab/
 │   │   ├─ gl/GLFunctions.h/.cpp + .inc  手写 X-macro 函数表
 │   │   ├─ gl/GLRenderDevice.h/.cpp      IRenderDevice 的 OpenGL 实现
 │   │   ├─ vk/VulkanRenderDevice.h/.cpp  IRenderDevice 的 Vulkan 实现
+│   │   ├─ d3d11/D3D11RenderDevice.h/.cpp IRenderDevice 的 D3D11 实现
 │   │   └─ resources/          （占位）BufferObject / MeshResource / TextureResource
 │   ├─ physics/                （占位）Collider / RigidBody / PhysicsWorld
 │   ├─ loader/                 （占位）FBXLoader / GLTFLoader
@@ -128,6 +135,7 @@ stv3d-lab (exe)   src/main.cpp、src/app/Sandbox.*                     ← 组�
    ├─ stv3d_platform_win32  src/platform/win32/*                  ← 窗口 / 消息泵 / 输入（user32、gdi32）
    ├─ stv3d_render_gl       src/render/gl/*                       ← OpenGL 后端（opengl32、gdi32）
    ├─ stv3d_render_vk       src/render/vk/*                       ← Vulkan 后端（vulkan-1）
+   ├─ stv3d_render_d3d11    src/render/d3d11/*                    ← D3D11 后端（d3d11、dxgi、d3dcompiler）
    ├─ stv3d_render          src/render/rhi/*                      ← RHI 接口（header-only INTERFACE 目标）
    ├─ stv3d_engine          src/game/{Camera.h,Model.h,Character.*,GameLoop.*,InputMapping.*}
    │                                                              ← 只链 core（无 Qt / 无 GL / 无 OS）
@@ -143,7 +151,8 @@ stv3d-lab (exe)  main.cpp：裸消息泵 + 游戏循环
  ├─ Win32Window           窗口类 / WndProc / 消息泵 / 输入采集 → FrameInput（HWND 交给渲染后端）
  ├─ IRenderDevice         RHI：swapchain / buffer / shader / pipeline / 帧（A5）
  │    ├─ GLRenderDevice   OpenGL 实现：GLContext + GLFunctions + 一个 command list
- │    └─ VulkanRenderDevice  Vulkan 实现：instance/device/swapchain/render pass + 命令缓冲（A6）
+ │    ├─ VulkanRenderDevice  Vulkan 实现：instance/device/swapchain/render pass + 命令缓冲（A6）
+ │    └─ D3D11RenderDevice   D3D11 实现：device/swapchain/input layout + 运行期 HLSL（A7）
  ├─ Sandbox               场景装配 + 输入处理 + 单帧绘制（只认 RHI）
  │    ├─ GameLoop / TaskScheduler   时间：固定步长逻辑刻 + 每帧回调
  │    ├─ InputMapping               按键 → 意图（纯函数，可单测）
@@ -168,13 +177,14 @@ stv3d-lab (exe)  main.cpp：裸消息泵 + 游戏循环
                  'src/core/geometry/generator/MeshGen.cpp','src/game/Character.cpp',
                  'src/game/GameLoop.cpp','src/game/InputMapping.cpp','src/render/gl/GLFunctions.cpp',
                  'src/render/gl/GLContext.cpp','src/render/gl/GLRenderDevice.cpp',
-                 'src/render/vk/VulkanRenderDevice.cpp','src/app/Sandbox.cpp',
+                 'src/render/vk/VulkanRenderDevice.cpp','src/render/d3d11/D3D11RenderDevice.cpp',
+                 'src/app/Sandbox.cpp',
                  'src/platform/win32/Win32Window.cpp','src/platform/win32/Win32Module.cpp') {
     & $g -std=c++17 -c $f -Isrc "-I$vcpkgInc" -o "$env:TEMP\proof.o"
   }
   ```
-  这 14 个文件全部通过 → 全项目没有任何 Qt 残留（`main.cpp` 只多一个 cpr 依赖；
-  Vulkan 后端需要 vcpkg 的 `vulkan/vulkan.h`，所以带上 `-I$vcpkgInc`）
+  这 15 个文件全部通过 → 全项目没有任何 Qt 残留（`main.cpp` 只多一个 cpr 依赖；
+  Vulkan 后端需要 vcpkg 的 `vulkan/vulkan.h`，所以带上 `-I$vcpkgInc`；D3D11 用 MinGW 自带头，不需要额外路径）
 - 单测目标只链 core/engine → 不需要窗口和显卡，`ctest` 0.3 秒跑完三个套件
 - 依赖方向上也做了保护：`Win32Window.h` 刻意**不** include `<windows.h>`（消息处理器用普通整数声明），
   这样 `near`/`far`/`min`/`max` 这类宏不会泄漏进 engine 和 app
@@ -339,6 +349,29 @@ v1 有意的简化（都在代码注释里标明）：单队列族（graphics �
 所有 buffer 都是 host-visible coherent 常驻映射（不搞 staging/allocator）、render pass 只在第一次建
 swapchain 时按格式创建一次、present mode 固定 FIFO、resize 时整体重建 swapchain。
 
+### `D3D11RenderDevice`（src/render/d3d11/D3D11RenderDevice.h/.cpp）
+RHI 的 Direct3D 11 实现，也是三个后端里最"短"的一个（D3D11 本身就是立即上下文，很多概念天然对应）。
+
+| RHI | D3D11 |
+|---|---|
+| 创建 | `D3D11CreateDevice`（feature level 11_1，失败回退 11_0）→ 从 `IDXGIDevice` 拿到 `IDXGIFactory2` → 适配器名写进日志 |
+| `createSwapchain` | `CreateSwapChainForHwnd`（`FLIP_DISCARD`、BGRA8、2 个 buffer）+ `MakeWindowAssociation(NO_ALT_ENTER)` → RTV + D32 深度纹理/DSV |
+| `beginFrame` | `OMSetRenderTargets` + `RSSetViewports` + command list begin |
+| `clear` | `ClearRenderTargetView` + `ClearDepthStencilView`（深度格式无模板，所以只清深度） |
+| `bindPipeline` | `IASetInputLayout` + `IASetPrimitiveTopology` + `VSSetShader`/`PSSetShader` + `OMSetDepthStencilState` + `RSSetState` |
+| `bindVertexBuffer` / `bindIndexBuffer` | `IASetVertexBuffers`（stride 来自 pipeline）/ `IASetIndexBuffer` |
+| `bindUniformBuffer` | 每个 (uniform buffer, 偏移) 槽惰性建一个 64 字节常量缓冲，`Map(WRITE_DISCARD)` 后整块绑定到 b0 |
+| `drawIndexed` | `DrawIndexed` |
+| `endFrame` | `Present(vsync ? 1 : 0, 0)` |
+| `waitIdle` | `Flush()` |
+| 着色器 | HLSL 运行期 `D3DCompile`（入口名约定 `VSMain`/`PSMain`）；输入布局的语义按 location 映射：0 → `POSITION`、1 → `COLOR`、其余 → `TEXCOORD<n>` |
+
+**为什么常量不是"一个缓冲 + 偏移"**：D3D11 的 `ID3D11DeviceContext1::*SetConstantBuffers1` 允许
+FirstConstant/NumConstants 的范围绑定，但本机 Intel 驱动上它会**静默给出错误数据**（实测：同一 draw
+改成整块绑定就正常渲染）。所以后端改成"每个块一个小常量缓冲"，用最经典的
+`VSSetConstantBuffers` 绑定 —— 代价是几十字节一个块，好处是**不再依赖 D3D11.1**，也不受驱动差异影响。
+应用侧完全不用知道这件事：它依旧只说"第 X 个块"。
+
 ### `Model`（src/game/Model.h → `stv3d_engine`，无 Qt / 无 GPU）
 - 变换：`setPosition` / `getPosition()` / `translate`（`vec3`）、`setRotation(quat)` / `getRotation()` /
   `setRotationDegrees(deg, axis)` / `rotateBy`、`setScale` / `setUniformScale` / `getScale()`
@@ -495,15 +528,17 @@ ctest --test-dir build            # 或直接跑 build\stv3d_*_tests.exe
 ### 后端怎么验证（每加一个后端都做一次）
 
 单测覆盖不到"画面对不对"，所以后端用**同一套画面回归**检查：启动程序 → 把窗口置顶（DPI-aware +
-`ClientToScreen`）→ 抓客户区 → 统计 clear 色之外的像素按列分组，看三组物体的相对位置；GL 与 Vulkan 的
-结果应落在同一区间。A6 的实测结果：
+`ClientToScreen`）→ 抓客户区 → 统计 clear 色之外的像素按列分组，看三组物体的相对位置；三个后端的结果
+应落在同一区间。最近一次实测（每次加/改后端都重跑）：
 
-| | 客户区 | clear 色 | 左立方体 | 中（立方体3+角色） | 右立方体 |
-|---|---|---|---|---|---|
-| `--api gl`（Intel UHD 630） | 800×600 | (25,31,38) | 0.242–0.330 | 0.478–0.522 | 0.655–0.780 |
-| `--api vk`（GTX 1050 Ti） | 800×600 | (25,31,38) | 0.250–0.328 | 0.478–0.522 | 0.658–0.778 |
+| 后端 | 客户区 | clear 色 | 左立方体 | 中（立方体3+角色） | 右立方体 | 两帧变化 | 日志错误 | 退出码 |
+|---|---|---|---|---|---|---|---|---|
+| `--api gl`（Intel UHD 630, 4×MSAA, GLSL） | 800×600 | (25,31,38) | 0.242–0.330 | 0.478–0.522 | 0.655–0.778 | 2481 | 0 | 0 |
+| `--api vk`（GTX 1050 Ti, 1 sample, SPIR-V） | 800×600 | (25,31,38) | 0.255–0.325 | 0.478–0.522 | 0.658–0.772 | 2435 | 0 | 0 |
+| `--api d3d11`（Intel UHD 630, 1 sample, HLSL） | 800×600 | (25,31,38) | 0.245–0.330 | 0.478–0.522 | 0.652–0.785 | 2611 | 0 | 0 |
 
-差别来自 GL 用 4× MSAA、Vulkan v1 是单采样，以及两块 GPU 的光栅化细节；位置一致即视为通过。
+差别来自 MSAA 与两块 GPU 的光栅化细节；位置一致、都在动、都无错误即视为通过。
+"两帧变化"是相隔 1.2 秒两次抓图的像素差——它同时证明了固定步长逻辑刻在跑（模型自转只可能来自 tick）。
 
 ### 迁移前的旧测试（已删除，覆盖面对照）
 
@@ -524,7 +559,7 @@ ctest --test-dir build            # 或直接跑 build\stv3d_*_tests.exe
 
 ## 11. 已知边界 / TODO
 
-**下一阶段：可切换三后端（Qt 已经彻底移除）**
+**下一阶段：可切换三后端（Qt 已经彻底移除，A0–A7 全部完成）**
 
 | # | 步骤 | 状态 |
 |---|---|---|
@@ -535,7 +570,16 @@ ctest --test-dir build            # 或直接跑 build\stv3d_*_tests.exe
 | A4 | **GL 上下文 + 函数表 + 去 qrc**：`render/gl/{GLContext,GLFunctions}`（WGL 建 4.3 core、手写 X-macro 表、`wglGetProcAddress` + 1.1 回退）、`Mesh/ShaderProgram` 改为注入函数表、着色器改磁盘文件、CMake 删掉 Qt/AUTOMOC/qrc/windeployqt → **Qt 归零** | ✅ 已完成 |
 | A5 | **抽 `IRenderDevice`**：`render/rhi/{RenderTypes,RenderDevice}` 定义显式帧模型（`beginFrame/endFrame`、`ICommandList`、Pipeline/Buffer/Shader 句柄、Swapchain、`NativeWindowHandle`、`ShaderLanguage`），`render/gl/GLRenderDevice` 先实现；`Sandbox` 只认 RHI；`Model` 改为按 `MeshId` 引用几何；core 合并成唯一 `Vertex` 并新增 `MeshGen`（立方体生成器 + 17 项单测）；删掉 `render/Mesh`、`render/ShaderProgram`、死代码 `core/geometry/Mesh.h` 与三个空占位生成器 | ✅ 已完成 |
 | A6 | **Vulkan 后端**：`render/vk/VulkanRenderDevice` 实现同一套 RHI（instance/surface/device/swapchain/render pass/命令缓冲/信号量/fence/动态偏移常量），`main.cpp` 加 `--api gl|vk`；着色器一份源码两用（构建期 `glslangValidator -V` 出 SPIR-V，SPIR-V 要求显式 location，已补）；RHI 补了 `uniformBufferAlignment()`、`framesInFlight()`、`clipDepth()/flipY()`、带 offset/size 的 `bindUniformBuffer`。**实测两后端画面一致**（见 §10 回归表） | ✅ 已完成 |
-| A7 | **D3D11 后端**：MinGW 自带 `d3d11/dxgi/d3dcompiler` 头与导入库，HLSL 运行时编译（系统自带 `D3DCompiler_47.dll`）；`render/d3d11/D3D11RenderDevice`；RHI 保留将来加 D3D12 的位置 | ⏭ 下一步 |
+| A7 | **D3D11 后端**：`render/d3d11/D3D11RenderDevice`（device + `CreateSwapChainForHwnd`(FLIP_DISCARD) + input layout + 运行期 HLSL 编译 + 每块一个小常量缓冲），`shaders/basic.hlsl`（VSMain/PSMain），`main.cpp` 加 `--api d3d11`；三后端画面一致（见 §10） | ✅ 已完成 |
+
+**这一步之后的状态**：目标里的两半都完成了 —— Qt 全清、三个后端可切换。剩下的都是可选深化，按需再做：
+
+| 可选方向 | 说明 |
+|---|---|
+| 后端细节对齐 | 给 Vulkan/D3D11 补 MSAA、剔除模式、混合、多渲染目标；`PipelineDesc` 已经是加这些的地方 |
+| 资源管理 | 纹理/采样器（`IRenderDevice` 加 `createTexture`）、设备内存分配（Vulkan 用 VMA，D3D11 用 staging 上传） |
+| 场景层 | `3d.h` 时代的"渲染队列"没做：目前 Sandbox 每帧线性遍历模型，可以换成按 pipeline/材质分组的队列 |
+| 工具 | `--api` 之外再加 `--shader-dir`、`--frames N`（跑固定帧数后退出，便于 CI 做画面回归） |
 
 **已完成的 Qt 阶段（历史）**
 

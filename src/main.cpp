@@ -4,6 +4,7 @@
 #include "game/InputMapping.h"
 #include "platform/win32/Win32Module.h"
 #include "platform/win32/Win32Window.h"
+#include "render/d3d11/D3D11RenderDevice.h"
 #include "render/gl/GLRenderDevice.h"
 #include "render/rhi/RenderDevice.h"
 #include "render/vk/VulkanRenderDevice.h"
@@ -15,8 +16,8 @@
 namespace
 {
 
-// Command line: --api gl|vk (default gl). This is the assembly root, so it is the one place that
-// knows which backends exist; everything below receives an IRenderDevice&.
+// Command line: --api gl|vk|d3d11 (default gl). This is the assembly root, so it is the one place
+// that knows which backends exist; everything below receives an IRenderDevice&.
 std::string parseRequestedApi(int argc, char **argv)
 {
     std::string api = "gl";
@@ -74,17 +75,32 @@ int main(int argc, char **argv)
     // ---- render device ----
     GLRenderDevice gl_device;
     VulkanRenderDevice vk_device;
+    D3D11RenderDevice d3d11_device;
 
     const bool use_vulkan = requested_api == "vk" || requested_api == "vulkan";
-    IRenderDevice *device = use_vulkan ? static_cast<IRenderDevice *>(&vk_device)
-                                       : static_cast<IRenderDevice *>(&gl_device);
+    const bool use_d3d11 = requested_api == "d3d11" || requested_api == "d3d" || requested_api == "dx11";
 
-    const bool device_created = use_vulkan ? vk_device.create(window.nativeHandle())
-                                           : gl_device.create(window.nativeHandle());
+    IRenderDevice *device = &gl_device;
+    if (use_vulkan) {
+        device = &vk_device;
+    } else if (use_d3d11) {
+        device = &d3d11_device;
+    }
+
+    bool device_created = false;
+    if (use_vulkan) {
+        device_created = vk_device.create(window.nativeHandle());
+    } else if (use_d3d11) {
+        device_created = d3d11_device.create(window.nativeHandle());
+    } else {
+        device_created = gl_device.create(window.nativeHandle());
+    }
+
     if (!device_created) {
         LOG_ERROR() << "render device creation failed: " << device->lastError();
         gl_device.destroy();
         vk_device.destroy();
+        d3d11_device.destroy();
         window.destroy();
         LogManager::shutdown();
         return 1;
@@ -100,6 +116,7 @@ int main(int argc, char **argv)
         LOG_ERROR() << "swapchain creation failed: " << device->lastError();
         gl_device.destroy();
         vk_device.destroy();
+        d3d11_device.destroy();
         window.destroy();
         LogManager::shutdown();
         return 1;
@@ -118,6 +135,7 @@ int main(int argc, char **argv)
         device->destroySwapchain();
         gl_device.destroy();
         vk_device.destroy();
+        d3d11_device.destroy();
         window.destroy();
         LogManager::shutdown();
         return 1;
@@ -125,7 +143,7 @@ int main(int argc, char **argv)
     sandbox.resize(window.clientWidth(), window.clientHeight());
 
     // Backend-specific diagnostics after the first resources exist (the GL backend reads glGetError)
-    if (!use_vulkan) {
+    if (!use_vulkan && !use_d3d11) {
         gl_device.reportErrors("after scene creation");
     }
 
@@ -168,6 +186,7 @@ int main(int argc, char **argv)
     device->destroySwapchain();
     gl_device.destroy();
     vk_device.destroy();
+    d3d11_device.destroy();
     window.destroy();
 
     LOG_INFO() << "===== stv3d-lab exit, code = 0 =====";

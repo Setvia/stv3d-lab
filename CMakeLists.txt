@@ -118,6 +118,15 @@ add_library(stv3d_render_vk STATIC
 target_include_directories(stv3d_render_vk PRIVATE "${VULKAN_INCLUDE_DIR}")
 target_link_libraries(stv3d_render_vk PUBLIC stv3d_render PRIVATE "${VULKAN_LIBRARY}")
 
+# ---- stv3d_render_d3d11: Direct3D 11 backend ------------------------------
+# MinGW ships the headers and the import libraries; D3DCompile itself lives in the system
+# d3dcompiler_47.dll, so HLSL is compiled at runtime and needs no build step.
+add_library(stv3d_render_d3d11 STATIC
+    src/render/d3d11/D3D11RenderDevice.cpp
+    src/render/d3d11/D3D11RenderDevice.h
+)
+target_link_libraries(stv3d_render_d3d11 PUBLIC stv3d_render PRIVATE d3d11 dxgi d3dcompiler)
+
 # ---- shader compilation ----------------------------------------------------
 # GLSL source is used directly by the OpenGL backend, SPIR-V by the Vulkan one. glslangValidator
 # produces the SPIR-V at build time, so the shaders stay the single source of truth.
@@ -161,6 +170,7 @@ target_link_libraries(stv3d-lab PRIVATE
     stv3d_render
     stv3d_render_gl
     stv3d_render_vk
+    stv3d_render_d3d11
     cpr::cpr
     nlohmann_json::nlohmann_json
 )
@@ -189,8 +199,9 @@ target_link_libraries(stv3d_core_log_tests PRIVATE stv3d_core)
 add_test(NAME core_log COMMAND stv3d_core_log_tests)
 
 # ---- runtime deployment (Windows) ---------------------------------------
-# Shaders are real files on disk (the Qt resource system is gone): the GLSL sources plus the
-# generated SPIR-V modules are copied next to the executable, where main.cpp looks for them.
+# Shaders are real files on disk (the Qt resource system is gone), and they are deployed by an
+# always-run target rather than a POST_BUILD step: editing a shader must not require the executable
+# to relink before the change is visible.
 set(_shader_copy_commands)
 if(STV3D_SPV_FILES)
     list(APPEND _shader_copy_commands
@@ -198,11 +209,15 @@ if(STV3D_SPV_FILES)
                 "$<TARGET_FILE_DIR:stv3d-lab>/shaders")
 endif()
 
-add_custom_command(TARGET stv3d-lab POST_BUILD
+add_custom_target(stv3d-assets ALL
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:stv3d-lab>/shaders"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${CMAKE_CURRENT_SOURCE_DIR}/shaders" "$<TARGET_FILE_DIR:stv3d-lab>/shaders"
     ${_shader_copy_commands}
-    COMMENT "Copying shaders (GLSL + SPIR-V) next to stv3d-lab.exe")
+    COMMENT "Deploying shaders (GLSL, HLSL + SPIR-V) next to stv3d-lab.exe")
+if(TARGET stv3d-spirv)
+    add_dependencies(stv3d-assets stv3d-spirv)
+endif()
 
 # Copy the vcpkg runtime DLLs next to the executable so it can be launched directly.
 if(WIN32 AND DEFINED VCPKG_INSTALLED_DIR)

@@ -71,8 +71,16 @@ bool Sandbox::createResources(IRenderDevice &device, const std::string &assetDir
             break;
 
         case ShaderLanguage::HLSLSource:
-            LOG_ERROR() << "HLSL shaders are not implemented yet (step A7)";
-            return false;
+            // One HLSL file holds both stages (entry points VSMain / PSMain, see shaders/basic.hlsl)
+            if (!File::readTextFile(shader_directory + "/basic.hlsl", vertex_source)
+                || !File::readTextFile(shader_directory + "/basic.hlsl", fragment_source)) {
+                return false;
+            }
+            vertex_desc.code = vertex_source.data();
+            vertex_desc.size = vertex_source.size();
+            fragment_desc.code = fragment_source.data();
+            fragment_desc.size = fragment_source.size();
+            break;
     }
 
     vertex_shader = device.createShader(vertex_desc);
