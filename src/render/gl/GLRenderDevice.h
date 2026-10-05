@@ -38,6 +38,10 @@ public:
     // IRenderDevice
     const char *backendName() const override;
     ShaderLanguage shaderLanguage() const override { return ShaderLanguage::GLSLSource; }
+    std::uint32_t uniformBufferAlignment() const override { return uniform_buffer_alignment; }
+    std::uint32_t framesInFlight() const override { return 1; }  // GL calls take effect immediately
+    ClipDepth clipDepth() const override { return ClipDepth::NegativeOneToOne; }  // GL convention
+    bool flipY() const override { return false; }
 
     bool createSwapchain(const SwapchainDesc &desc) override;
     void destroySwapchain() override;
@@ -109,6 +113,7 @@ private:
     GLuint vertex_array = 0;
     std::uint32_t width = 0;
     std::uint32_t height = 0;
+    std::uint32_t uniform_buffer_alignment = 16;  // GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, queried in create()
 
     std::vector<BufferSlot> buffers;
     std::vector<ShaderSlot> shaders;

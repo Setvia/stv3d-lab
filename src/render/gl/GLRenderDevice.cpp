@@ -160,7 +160,8 @@ public:
         index_format = format;
     }
 
-    void bindUniformBuffer(BufferHandle buffer, std::uint32_t slot) override
+    void bindUniformBuffer(BufferHandle buffer, std::uint32_t slot, std::uint32_t offset,
+                           std::uint32_t size) override
     {
         GLRenderDevice::BufferSlot *buffer_slot = device.bufferSlot(buffer);
         if (buffer_slot == nullptr || buffer_slot->usage != BufferUsage::Uniform) {
@@ -168,7 +169,10 @@ public:
             return;
         }
 
-        device.gfx.glBindBufferBase(GL_UNIFORM_BUFFER, slot, buffer_slot->id);
+        // A range rather than the whole buffer: the app puts one block per draw (and per frame in
+        // flight) into a single buffer, exactly like Vulkan wants it
+        device.gfx.glBindBufferRange(GL_UNIFORM_BUFFER, slot, buffer_slot->id,
+                                     static_cast<GLintptr>(offset), static_cast<GLsizeiptr>(size));
     }
 
     void drawIndexed(std::uint32_t index_count, std::uint32_t first_index) override
@@ -238,6 +242,13 @@ bool GLRenderDevice::create(const NativeWindowHandle &window, const GLContext::C
     // Core profile requires a bound VAO before any attribute state can be set
     gfx.glGenVertexArrays(1, &vertex_array);
     gfx.glBindVertexArray(vertex_array);
+
+    // How coarse uniform buffer ranges have to be aligned; the app uses it to lay out per-draw blocks
+    GLint alignment = 0;
+    gfx.glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &alignment);
+    if (alignment > 0) {
+        uniform_buffer_alignment = static_cast<std::uint32_t>(alignment);
+    }
 
     backend_name = "OpenGL ";
     const char *version = reinterpret_cast<const char *>(gfx.glGetString(GL_VERSION));

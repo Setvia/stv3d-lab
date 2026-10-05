@@ -45,8 +45,14 @@ public:
     virtual void bindVertexBuffer(BufferHandle buffer) = 0;
     virtual void bindIndexBuffer(BufferHandle buffer, IndexFormat format) = 0;
 
-    // Constant buffer for the shaders (OpenGL: a uniform buffer bound to `slot`)
-    virtual void bindUniformBuffer(BufferHandle buffer, std::uint32_t slot) = 0;
+    // Constant buffer for the shaders.
+    //
+    // The offset/size pair is what makes per-draw constants work on Vulkan and D3D12: a frame in
+    // flight must not have its constants overwritten, so the app writes every draw's block into one
+    // buffer at aligned offsets (see IRenderDevice::uniformBufferAlignment) and binds a range.
+    // OpenGL maps it to glBindBufferRange, which is the same thing.
+    virtual void bindUniformBuffer(BufferHandle buffer, std::uint32_t slot, std::uint32_t offset,
+                                   std::uint32_t size) = 0;
 
     virtual void drawIndexed(std::uint32_t index_count, std::uint32_t first_index = 0) = 0;
 };
@@ -61,6 +67,21 @@ public:
 
     // Which shader dialect createShader() expects
     virtual ShaderLanguage shaderLanguage() const = 0;
+
+    // Required alignment for uniform buffer ranges: lay per-draw constant blocks out at multiples of
+    // this (Vulkan: minUniformBufferOffsetAlignment, often 64 or 256; OpenGL: 16 is enough for std140)
+    virtual std::uint32_t uniformBufferAlignment() const = 0;
+
+    // How many frames the backend may have in flight. The app must not rewrite constants a frame in
+    // flight may still read, so it keeps one constant-block region per frame in flight
+    // (OpenGL: 1, Vulkan/D3D12: 2).
+    virtual std::uint32_t framesInFlight() const = 0;
+
+    // How this backend wants clip space. OpenGL maps NDC z to [-1, 1] with +Y up; Vulkan wants
+    // [0, 1] with +Y down. The app hands both to its camera, so the projection matrix is built
+    // correctly per backend instead of being patched up in a shader.
+    virtual ClipDepth clipDepth() const = 0;
+    virtual bool flipY() const = 0;
 
     // ---- swapchain ----
     // The surface is the native window; the backend creates whatever it needs from it

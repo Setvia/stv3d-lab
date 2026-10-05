@@ -6,6 +6,7 @@
 #include "game/InputMapping.h"
 
 #include <cstddef>
+#include <cstdint>
 
 Sandbox::Sandbox()
 {
@@ -25,35 +26,56 @@ bool Sandbox::createResources(IRenderDevice &device, const std::string &assetDir
 {
     this->device = &device;
 
+    // Clip space is a backend property, not a shader hack: OpenGL wants z in [-1,1] with +Y up,
+    // Vulkan z in [0,1] with +Y down. The camera takes both as parameters (see core conventions).
+    character.getCamera().setClipDepth(device.clipDepth());
+    character.getCamera().setFlipY(device.flipY());
+
     // (1) Shaders.
     // The device says which dialect it wants, so a backend switch means loading different files
-    // rather than editing this code. Only GLSL exists today; the SPIR-V (A6) and HLSL (A7) branches
-    // plug in here.
-    if (device.shaderLanguage() != ShaderLanguage::GLSLSource) {
-        LOG_ERROR() << "this backend's shader dialect is not implemented yet: " << device.backendName();
-        return false;
-    }
-
+    // rather than editing this code: GLSL text for OpenGL, a SPIR-V binary for Vulkan.
     std::string vertex_source;
     std::string fragment_source;
+    std::vector<std::uint8_t> vertex_binary;
+    std::vector<std::uint8_t> fragment_binary;
     const std::string shader_directory = assetDirectory + "/shaders";
-    if (!File::readTextFile(shader_directory + "/basic.vert", vertex_source)
-        || !File::readTextFile(shader_directory + "/basic.frag", fragment_source)) {
-        return false;
-    }
 
     ShaderDesc vertex_desc;
     vertex_desc.stage = ShaderStage::Vertex;
-    vertex_desc.code = vertex_source.data();
-    vertex_desc.size = vertex_source.size();
-    vertex_desc.debug_name = "basic.vert";
-    vertex_shader = device.createShader(vertex_desc);
-
+    vertex_desc.debug_name = "basic";
     ShaderDesc fragment_desc;
     fragment_desc.stage = ShaderStage::Fragment;
-    fragment_desc.code = fragment_source.data();
-    fragment_desc.size = fragment_source.size();
-    fragment_desc.debug_name = "basic.frag";
+    fragment_desc.debug_name = "basic";
+
+    switch (device.shaderLanguage()) {
+        case ShaderLanguage::GLSLSource:
+            if (!File::readTextFile(shader_directory + "/basic.vert", vertex_source)
+                || !File::readTextFile(shader_directory + "/basic.frag", fragment_source)) {
+                return false;
+            }
+            vertex_desc.code = vertex_source.data();
+            vertex_desc.size = vertex_source.size();
+            fragment_desc.code = fragment_source.data();
+            fragment_desc.size = fragment_source.size();
+            break;
+
+        case ShaderLanguage::SPIRV:
+            if (!File::readBinaryFile(shader_directory + "/basic.vert.spv", vertex_binary)
+                || !File::readBinaryFile(shader_directory + "/basic.frag.spv", fragment_binary)) {
+                return false;
+            }
+            vertex_desc.code = vertex_binary.data();
+            vertex_desc.size = vertex_binary.size();
+            fragment_desc.code = fragment_binary.data();
+            fragment_desc.size = fragment_binary.size();
+            break;
+
+        case ShaderLanguage::HLSLSource:
+            LOG_ERROR() << "HLSL shaders are not implemented yet (step A7)";
+            return false;
+    }
+
+    vertex_shader = device.createShader(vertex_desc);
     fragment_shader = device.createShader(fragment_desc);
 
     if (vertex_shader == kInvalidHandle || fragment_shader == kInvalidHandle) {
@@ -108,19 +130,7 @@ bool Sandbox::createResources(IRenderDevice &device, const std::string &assetDir
     meshes.push_back(mesh);
     const MeshId cube_mesh = 0;
 
-    // (4) Constant buffer for the per-draw matrix (std140, slot 0 in the shader)
-    uniform_buffer_size = static_cast<std::uint32_t>(sizeof(mat4));
-    BufferDesc uniform_buffer_desc;
-    uniform_buffer_desc.size = uniform_buffer_size;
-    uniform_buffer_desc.usage = BufferUsage::Uniform;
-    uniform_buffer_desc.initial_data = nullptr;  // filled per draw
-    uniform_buffer = device.createBuffer(uniform_buffer_desc);
-    if (uniform_buffer == kInvalidHandle) {
-        LOG_ERROR() << "constant buffer creation failed: " << device.lastError();
-        return false;
-    }
-
-    // (5) Models: three spinning cubes plus the character placeholder, all sharing one geometry
+    // (4) Models: three spinning cubes plus the character placeholder, all sharing one geometry
     struct ModelSpec
     {
         vec3 position;
@@ -147,6 +157,23 @@ bool Sandbox::createResources(IRenderDevice &device, const std::string &assetDir
     character_model.setUniformScale(0.6f);
     character_model.setSpin(0.0f);  // the character does not spin
     syncCharacterModel();
+
+    // (5) Constant buffer: one block per draw, times the number of frames the backend may run in
+    // flight, each block aligned to what the device requires. All of them live in one buffer and are
+    // selected with a range/dynamic offset at bind time - the portable way to feed per-draw constants.
+    max_draws = static_cast<std::uint32_t>(models.size() + 1);  // the models plus the character
+    const std::uint32_t alignment = device.uniformBufferAlignment() > 0 ? device.uniformBufferAlignment() : 16;
+    uniform_stride = ((static_cast<std::uint32_t>(sizeof(mat4)) + alignment - 1) / alignment) * alignment;
+
+    BufferDesc uniform_buffer_desc;
+    uniform_buffer_desc.size = uniform_stride * max_draws * device.framesInFlight();
+    uniform_buffer_desc.usage = BufferUsage::Uniform;
+    uniform_buffer_desc.initial_data = nullptr;  // filled every frame
+    uniform_buffer = device.createBuffer(uniform_buffer_desc);
+    if (uniform_buffer == kInvalidHandle) {
+        LOG_ERROR() << "constant buffer creation failed: " << device.lastError();
+        return false;
+    }
 
     LOG_INFO() << "scene: " << meshes.size() << " mesh(es), " << (models.size() + 1) << " model(s)"
                << " | backend: " << device.backendName();
@@ -240,17 +267,18 @@ void Sandbox::handleInput(const FrameInput &input)
 }
 
 void Sandbox::drawModel(IRenderDevice &device, ICommandList &commands, const mat4 &view_projection,
-                        const Model &model)
+                        const Model &model, std::uint32_t block_index)
 {
     if (!model.hasMesh() || model.getMesh() >= meshes.size()) {
         return;
     }
 
-    // One constant buffer per draw. Note for the Vulkan/D3D12 backends: a frame in flight must not
-    // overwrite constants the GPU may still be reading, so A6/A7 will need a small ring of buffers
-    // here (or dynamic offsets) instead of updating one buffer between draws.
+    // Write this draw's matrix into its own aligned block, then bind exactly that range. Nothing is
+    // overwritten that a frame in flight could still be reading.
     const mat4 mvp = view_projection * model.modelMatrix();
-    device.updateBuffer(uniform_buffer, &mvp, uniform_buffer_size, 0);
+    const std::uint32_t offset = block_index * uniform_stride;
+    device.updateBuffer(uniform_buffer, &mvp, static_cast<std::uint32_t>(sizeof(mat4)), offset);
+    commands.bindUniformBuffer(uniform_buffer, 0, offset, static_cast<std::uint32_t>(sizeof(mat4)));
 
     commands.drawIndexed(meshes[model.getMesh()].index_count);
 }
@@ -261,18 +289,27 @@ void Sandbox::render(IRenderDevice &device)
 
     commands.clear(0.1f, 0.12f, 0.15f, 0.1f, 1.0f);
 
+    if (meshes.empty()) {
+        return;
+    }
+
     commands.bindPipeline(pipeline);
-    commands.bindVertexBuffer(meshes.empty() ? kInvalidHandle : meshes[0].vertex_buffer);
-    commands.bindIndexBuffer(meshes.empty() ? kInvalidHandle : meshes[0].index_buffer, IndexFormat::UInt32);
-    commands.bindUniformBuffer(uniform_buffer, 0);
+    commands.bindVertexBuffer(meshes[0].vertex_buffer);
+    commands.bindIndexBuffer(meshes[0].index_buffer, meshes[0].index_format);
 
     const Camera &camera = character.getCamera();
     const mat4 view_projection = camera.projectionMatrix() * camera.viewMatrix();
 
+    // This frame owns one set of constant blocks
+    const std::uint32_t frame_base = frame_index * max_draws;
+    std::uint32_t block = 0;
     for (const Model &model : models) {
-        drawModel(device, commands, view_projection, model);
+        drawModel(device, commands, view_projection, model, frame_base + block);
+        ++block;
     }
-    drawModel(device, commands, view_projection, character_model);
+    drawModel(device, commands, view_projection, character_model, frame_base + block);
+
+    frame_index = (frame_index + 1) % device.framesInFlight();
 }
 
 // ---------------- logic ----------------

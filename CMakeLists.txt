@@ -103,6 +103,47 @@ add_library(stv3d_render_gl STATIC
 )
 target_link_libraries(stv3d_render_gl PUBLIC stv3d_render PRIVATE opengl32 gdi32)
 
+# ---- stv3d_render_vk: Vulkan backend --------------------------------------
+# Dependencies come from vcpkg (this machine has no Vulkan SDK):
+#   vcpkg install vulkan-headers vulkan-loader "glslang[tools]" \
+#         --triplet x64-mingw-dynamic --host-triplet x64-mingw-dynamic --recurse
+set(_vcpkg_installed "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
+find_path(VULKAN_INCLUDE_DIR vulkan/vulkan.h HINTS "${_vcpkg_installed}/include" REQUIRED)
+find_library(VULKAN_LIBRARY NAMES vulkan-1 HINTS "${_vcpkg_installed}/lib" REQUIRED)
+
+add_library(stv3d_render_vk STATIC
+    src/render/vk/VulkanRenderDevice.cpp
+    src/render/vk/VulkanRenderDevice.h
+)
+target_include_directories(stv3d_render_vk PRIVATE "${VULKAN_INCLUDE_DIR}")
+target_link_libraries(stv3d_render_vk PUBLIC stv3d_render PRIVATE "${VULKAN_LIBRARY}")
+
+# ---- shader compilation ----------------------------------------------------
+# GLSL source is used directly by the OpenGL backend, SPIR-V by the Vulkan one. glslangValidator
+# produces the SPIR-V at build time, so the shaders stay the single source of truth.
+find_program(GLSLANG_VALIDATOR
+    NAMES glslangValidator glslangValidator.exe
+    HINTS "${_vcpkg_installed}/tools/glslang")
+set(STV3D_SPV_FILES "")
+if(GLSLANG_VALIDATOR)
+    set(_spv_dir "${CMAKE_CURRENT_BINARY_DIR}/shaders")
+    file(MAKE_DIRECTORY "${_spv_dir}")
+    foreach(_stage vert frag)
+        set(_spv "${_spv_dir}/basic.${_stage}.spv")
+        add_custom_command(
+            OUTPUT "${_spv}"
+            COMMAND "${GLSLANG_VALIDATOR}" -V
+                    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/basic.${_stage}" -o "${_spv}"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/basic.${_stage}"
+            COMMENT "Compiling shaders/basic.${_stage} to SPIR-V")
+        list(APPEND STV3D_SPV_FILES "${_spv}")
+    endforeach()
+    add_custom_target(stv3d-spirv DEPENDS ${STV3D_SPV_FILES})
+else()
+    message(WARNING "glslangValidator not found: the Vulkan backend gets no SPIR-V shaders "
+                    "(install glslang[tools] with vcpkg)")
+endif()
+
 # ---- third-party dependencies ---------------------------------------------
 find_package(cpr CONFIG REQUIRED)            # HTTP client (libcurl wrapper)
 find_package(nlohmann_json CONFIG REQUIRED)  # JSON parsing (header-only, unused so far)
@@ -119,9 +160,13 @@ target_link_libraries(stv3d-lab PRIVATE
     stv3d_platform_win32
     stv3d_render
     stv3d_render_gl
+    stv3d_render_vk
     cpr::cpr
     nlohmann_json::nlohmann_json
 )
+if(TARGET stv3d-spirv)
+    add_dependencies(stv3d-lab stv3d-spirv)
+endif()
 
 # ---- unit tests: no window, no GPU, no Qt ---------------------------------
 enable_testing()
@@ -144,12 +189,20 @@ target_link_libraries(stv3d_core_log_tests PRIVATE stv3d_core)
 add_test(NAME core_log COMMAND stv3d_core_log_tests)
 
 # ---- runtime deployment (Windows) ---------------------------------------
-# Shaders are real files on disk now (the Qt resource system is gone), so they are copied next to the
-# executable where main.cpp looks for them.
+# Shaders are real files on disk (the Qt resource system is gone): the GLSL sources plus the
+# generated SPIR-V modules are copied next to the executable, where main.cpp looks for them.
+set(_shader_copy_commands)
+if(STV3D_SPV_FILES)
+    list(APPEND _shader_copy_commands
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${STV3D_SPV_FILES}
+                "$<TARGET_FILE_DIR:stv3d-lab>/shaders")
+endif()
+
 add_custom_command(TARGET stv3d-lab POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${CMAKE_CURRENT_SOURCE_DIR}/shaders" "$<TARGET_FILE_DIR:stv3d-lab>/shaders"
-    COMMENT "Copying shaders next to stv3d-lab.exe")
+    ${_shader_copy_commands}
+    COMMENT "Copying shaders (GLSL + SPIR-V) next to stv3d-lab.exe")
 
 # Copy the vcpkg runtime DLLs next to the executable so it can be launched directly.
 if(WIN32 AND DEFINED VCPKG_INSTALLED_DIR)

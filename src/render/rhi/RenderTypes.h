@@ -1,6 +1,7 @@
 #ifndef RENDER_RHI_RENDERTYPES_H
 #define RENDER_RHI_RENDERTYPES_H
 
+#include "core/math/conventions.h"
 #include "core/platform/NativeWindowHandle.h"
 
 #include <cstddef>

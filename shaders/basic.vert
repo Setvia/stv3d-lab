@@ -17,7 +17,9 @@ layout(std140, binding = 0) uniform Scene
     mat4 uMvp;
 } scene;
 
-out vec3 vColor;
+// Location on an output is not required by OpenGL, but SPIR-V (Vulkan) demands one for every user
+// input/output, so both backends consume this same source.
+layout(location = 0) out vec3 vColor;
 
 void main()
 {

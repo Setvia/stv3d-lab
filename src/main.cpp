@@ -6,15 +6,47 @@
 #include "platform/win32/Win32Window.h"
 #include "render/gl/GLRenderDevice.h"
 #include "render/rhi/RenderDevice.h"
+#include "render/vk/VulkanRenderDevice.h"
 
 #include <cpr/cpr.h>
+
+#include <string>
+
+namespace
+{
+
+// Command line: --api gl|vk (default gl). This is the assembly root, so it is the one place that
+// knows which backends exist; everything below receives an IRenderDevice&.
+std::string parseRequestedApi(int argc, char **argv)
+{
+    std::string api = "gl";
+    for (int i = 1; i < argc; ++i) {
+        const std::string argument = argv[i];
+        if (argument == "--api" && i + 1 < argc) {
+            api = argv[++i];
+        }
+    }
+    return api;
+}
+
+const char *dialectName(ShaderLanguage language)
+{
+    switch (language) {
+        case ShaderLanguage::GLSLSource: return "GLSL";
+        case ShaderLanguage::SPIRV:      return "SPIR-V";
+        case ShaderLanguage::HLSLSource: return "HLSL";
+    }
+    return "unknown";
+}
+
+}  // namespace
 
 // stv3d-lab entry point.
 //
 // A plain main(): log, window, render device, scene, then pump/input/advance/render/present. The only
-// line that names a graphics API is the concrete device below - everything else talks to
-// IRenderDevice, which is what makes the Vulkan (A6) and D3D11 (A7) backends a local change.
-int main()
+// lines that name a graphics API are the two concrete devices below - everything else talks to
+// IRenderDevice, which is what makes picking a backend a command-line flag instead of a rewrite.
+int main(int argc, char **argv)
 {
     // ---- logging first: every later step wants to report somewhere ----
     // The exe directory (not the working directory) decides where the log goes
@@ -22,6 +54,9 @@ int main()
     if (!LogManager::init(exe_directory + "/stv3d-lab.log")) {
         return 1;  // if logging cannot even be opened there is no point continuing
     }
+
+    const std::string requested_api = parseRequestedApi(argc, argv);
+    LOG_INFO() << "requested API: " << requested_api;
 
     // ---- window ----
     Win32Window::Config window_config;
@@ -37,11 +72,19 @@ int main()
     }
 
     // ---- render device ----
-    GLRenderDevice gl_device;      // the backend choice lives exactly here
-    IRenderDevice &device = gl_device;
+    GLRenderDevice gl_device;
+    VulkanRenderDevice vk_device;
 
-    if (!gl_device.create(window.nativeHandle())) {
-        LOG_ERROR() << "render device creation failed: " << device.lastError();
+    const bool use_vulkan = requested_api == "vk" || requested_api == "vulkan";
+    IRenderDevice *device = use_vulkan ? static_cast<IRenderDevice *>(&vk_device)
+                                       : static_cast<IRenderDevice *>(&gl_device);
+
+    const bool device_created = use_vulkan ? vk_device.create(window.nativeHandle())
+                                           : gl_device.create(window.nativeHandle());
+    if (!device_created) {
+        LOG_ERROR() << "render device creation failed: " << device->lastError();
+        gl_device.destroy();
+        vk_device.destroy();
         window.destroy();
         LogManager::shutdown();
         return 1;
@@ -53,29 +96,28 @@ int main()
     swapchain_desc.height = static_cast<std::uint32_t>(window.clientHeight());
     swapchain_desc.vsync = true;
 
-    if (!device.createSwapchain(swapchain_desc)) {
-        LOG_ERROR() << "swapchain creation failed: " << device.lastError();
+    if (!device->createSwapchain(swapchain_desc)) {
+        LOG_ERROR() << "swapchain creation failed: " << device->lastError();
         gl_device.destroy();
+        vk_device.destroy();
         window.destroy();
         LogManager::shutdown();
         return 1;
     }
 
-    const char *dialect = "unknown";
-    switch (device.shaderLanguage()) {
-        case ShaderLanguage::GLSLSource: dialect = "GLSL"; break;
-        case ShaderLanguage::SPIRV:      dialect = "SPIR-V"; break;
-        case ShaderLanguage::HLSLSource: dialect = "HLSL"; break;
-    }
-    LOG_INFO() << "render backend: " << device.backendName() << " | shaders: " << dialect
-               << " | swapchain: " << device.swapchainWidth() << "x" << device.swapchainHeight();
+    LOG_INFO() << "render backend: " << device->backendName()
+               << " | shaders: " << dialectName(device->shaderLanguage())
+               << " | swapchain: " << device->swapchainWidth() << "x" << device->swapchainHeight()
+               << " | frames in flight: " << device->framesInFlight()
+               << " | uniform alignment: " << device->uniformBufferAlignment();
 
     // ---- scene ----
     Sandbox sandbox;
-    if (!sandbox.createResources(device, exe_directory)) {
+    if (!sandbox.createResources(*device, exe_directory)) {
         LOG_ERROR() << "scene creation failed";
-        device.destroySwapchain();
+        device->destroySwapchain();
         gl_device.destroy();
+        vk_device.destroy();
         window.destroy();
         LogManager::shutdown();
         return 1;
@@ -83,7 +125,9 @@ int main()
     sandbox.resize(window.clientWidth(), window.clientHeight());
 
     // Backend-specific diagnostics after the first resources exist (the GL backend reads glGetError)
-    gl_device.reportErrors("after scene creation");
+    if (!use_vulkan) {
+        gl_device.reportErrors("after scene creation");
+    }
 
     // Network request test (kept from the Qt era: it only proves the cpr dependency works)
     const cpr::Response response = cpr::Get(cpr::Url{"https://httpbin.org/get"});
@@ -104,25 +148,26 @@ int main()
         sandbox.handleInput(input);
 
         if (input.resized) {
-            device.resizeSwapchain(static_cast<std::uint32_t>(window.clientWidth()),
-                                   static_cast<std::uint32_t>(window.clientHeight()));
+            device->resizeSwapchain(static_cast<std::uint32_t>(window.clientWidth()),
+                                    static_cast<std::uint32_t>(window.clientHeight()));
             sandbox.resize(window.clientWidth(), window.clientHeight());
         }
 
         sandbox.getGameLoop().advance();
 
-        device.beginFrame();
-        sandbox.render(device);
-        device.endFrame();
+        device->beginFrame();
+        sandbox.render(*device);
+        device->endFrame();
 
         window.endFrame();
     }
 
     // ---- shutdown: GPU work first, then resources, then the device and the window ----
-    device.waitIdle();
+    device->waitIdle();
     sandbox.releaseResources();
-    device.destroySwapchain();
+    device->destroySwapchain();
     gl_device.destroy();
+    vk_device.destroy();
     window.destroy();
 
     LOG_INFO() << "===== stv3d-lab exit, code = 0 =====";

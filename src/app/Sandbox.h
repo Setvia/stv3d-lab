@@ -62,7 +62,7 @@ private:
     void syncCharacterModel();
     void logCameraPositionIfMoved();
     void drawModel(IRenderDevice &device, ICommandList &commands, const mat4 &view_projection,
-                   const Model &model);
+                   const Model &model, std::uint32_t block_index);
 
     void resetCamera();
     void setCameraView(CameraView view);
@@ -74,7 +74,14 @@ private:
     ShaderHandle fragment_shader = kInvalidHandle;
     BufferHandle uniform_buffer = kInvalidHandle;
     std::vector<GpuMesh> meshes;
-    std::uint32_t uniform_buffer_size = 0;
+
+    // Constant blocks: one per draw, and one set of them per frame in flight, laid out at
+    // device.uniformBufferAlignment() boundaries. A single block would be overwritten while the GPU
+    // may still be reading it (Vulkan/D3D12 run 2 frames in flight); OpenGL gets the same layout and
+    // simply ignores the extra slots.
+    std::uint32_t uniform_stride = 0;   // bytes per block
+    std::uint32_t max_draws = 0;        // blocks per frame
+    std::uint32_t frame_index = 0;      // which set of blocks this frame uses
 
     // ---- scene state ----
     std::vector<Model> models;  // each element is an independent spinning cube

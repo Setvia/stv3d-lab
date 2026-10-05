@@ -20,12 +20,19 @@ Win32 + OpenGL 4.3 Core 的「全显式」渲染原型 / 迷你引擎雏形。**
 |---|---|
 | 编译器 | MinGW-w64 g++ **13.2.0**（`D:\MinGW`），CMake 4.1.1 |
 | vcpkg | `D:\git\repos\vcpkg`，triplet **`x64-mingw-dynamic`** |
-| vcpkg 包 | `cpr`（HTTP）、`nlohmann-json`（JSON，待用） |
-| 系统库 | `user32` `gdi32` `opengl32`（MinGW 自带，含 `GL/glcorearb.h`、`GL/wglext.h`） |
-| 显卡要求 | **OpenGL 4.3**（显式顶点属性绑定 API 的最低版本）；开发机为 Intel UHD 630 / 驱动 4.3.0 |
+| vcpkg 包 | `cpr`（HTTP）、`nlohmann-json`（JSON，待用）、`vulkan-headers`、`vulkan-loader`、`glslang[tools]`（GLSL→SPIR-V） |
+| 系统库 | `user32` `gdi32` `opengl32`（MinGW 自带，含 `GL/glcorearb.h`、`GL/wglext.h`）；Vulkan 运行时 `vulkan-1.dll`（显卡驱动自带） |
+| 显卡 | 本机两块：OpenGL 走 Intel UHD 630（驱动 4.3.0），Vulkan 后端优先选**独显** GeForce GTX 1050 Ti（Vulkan 1.2） |
 
 > Qt 已经**不是**依赖了：`find_package(Qt6)`、AUTOMOC/AUTORCC、`.qrc`、`windeployqt` 全部移除。
-> 现在 exe 只依赖 `libcpr.dll`（以及它带来的 curl/openssl 等）与系统库——`objdump -p` 可直接验证。
+> 现在 exe 只依赖 `libcpr.dll`、`vulkan-1.dll`（Vulkan 后端）与系统库——`objdump -p` 可直接验证。
+
+> Vulkan 的三件依赖这样装（本机没有 Vulkan SDK）：
+> ```powershell
+> vcpkg install vulkan-headers vulkan-loader "glslang[tools]" `
+>       --triplet x64-mingw-dynamic --host-triplet x64-mingw-dynamic --recurse
+> ```
+> `glslang` 的 `tools` feature 才带 `glslangValidator`，缺了它 SPIR-V 就不会生成（CMake 会给警告）。
 
 > vcpkg 在这台机器上没有 MSVC，所以安装任何包都要带 `--host-triplet x64-mingw-dynamic`，
 > 否则会去构建 `x64-windows` 的宿主工具并报 `Unable to find a valid Visual Studio instance`。
@@ -34,9 +41,14 @@ Win32 + OpenGL 4.3 Core 的「全显式」渲染原型 / 迷你引擎雏形。**
 
 ```powershell
 cmake --preset mingw            # 配置（preset 内含编译器、vcpkg toolchain、triplet）
-cmake --build --preset mingw    # 构建 → build\stv3d-lab.exe
-.\build\stv3d-lab.exe           # 运行
+cmake --build --preset mingw    # 构建 → build\stv3d-lab.exe（顺便把 GLSL 编成 SPIR-V）
+.\build\stv3d-lab.exe                # 运行（默认 OpenGL 后端）
+.\build\stv3d-lab.exe --api vk       # 运行（Vulkan 后端）
 ```
+
+- **后端由命令行选**：`--api gl`（默认）/ `--api vk`。选择只发生在 `src/main.cpp`，其余代码只认 `IRenderDevice`
+- 构建期会调 `glslangValidator -V` 把 `shaders/basic.{vert,frag}` 编成 `basic.*.spv`，
+  和 GLSL 源文件一起复制到 exe 旁边的 `shaders/`（两个后端共用同一份着色器源码）
 
 - VS Code：**F5** = 配置 + 构建 + 调试（`.vscode/tasks.json`、`launch.json` 已接好）；**Ctrl+Shift+B** 只构建
 - `build\` 是**自足目录**：构建后自动把 vcpkg 运行时 DLL 与 `shaders/` 放到 exe 旁边，双击即可跑
@@ -92,6 +104,7 @@ stv3d-lab/
 │   │   ├─ gl/GLContext.h/.cpp WGL 上下文：像素格式 + 4.3 core + vsync + SwapBuffers
 │   │   ├─ gl/GLFunctions.h/.cpp + .inc  手写 X-macro 函数表
 │   │   ├─ gl/GLRenderDevice.h/.cpp      IRenderDevice 的 OpenGL 实现
+│   │   ├─ vk/VulkanRenderDevice.h/.cpp  IRenderDevice 的 Vulkan 实现
 │   │   └─ resources/          （占位）BufferObject / MeshResource / TextureResource
 │   ├─ physics/                （占位）Collider / RigidBody / PhysicsWorld
 │   ├─ loader/                 （占位）FBXLoader / GLTFLoader
@@ -114,6 +127,7 @@ stv3d-lab/
 stv3d-lab (exe)   src/main.cpp、src/app/Sandbox.*                     ← 组装根
    ├─ stv3d_platform_win32  src/platform/win32/*                  ← 窗口 / 消息泵 / 输入（user32、gdi32）
    ├─ stv3d_render_gl       src/render/gl/*                       ← OpenGL 后端（opengl32、gdi32）
+   ├─ stv3d_render_vk       src/render/vk/*                       ← Vulkan 后端（vulkan-1）
    ├─ stv3d_render          src/render/rhi/*                      ← RHI 接口（header-only INTERFACE 目标）
    ├─ stv3d_engine          src/game/{Camera.h,Model.h,Character.*,GameLoop.*,InputMapping.*}
    │                                                              ← 只链 core（无 Qt / 无 GL / 无 OS）
@@ -128,7 +142,8 @@ stv3d_engine_tests   tests/engine_test.cpp         ← 只链 stv3d_engine
 stv3d-lab (exe)  main.cpp：裸消息泵 + 游戏循环
  ├─ Win32Window           窗口类 / WndProc / 消息泵 / 输入采集 → FrameInput（HWND 交给渲染后端）
  ├─ IRenderDevice         RHI：swapchain / buffer / shader / pipeline / 帧（A5）
- │    └─ GLRenderDevice   OpenGL 实现：GLContext + GLFunctions + 一个 command list
+ │    ├─ GLRenderDevice   OpenGL 实现：GLContext + GLFunctions + 一个 command list
+ │    └─ VulkanRenderDevice  Vulkan 实现：instance/device/swapchain/render pass + 命令缓冲（A6）
  ├─ Sandbox               场景装配 + 输入处理 + 单帧绘制（只认 RHI）
  │    ├─ GameLoop / TaskScheduler   时间：固定步长逻辑刻 + 每帧回调
  │    ├─ InputMapping               按键 → 意图（纯函数，可单测）
@@ -148,15 +163,18 @@ stv3d-lab (exe)  main.cpp：裸消息泵 + 游戏循环
 - 每个 TU 都能被裸编译器单独编过，这就是解耦的证明（不需要 CMake、不需要 Qt、不需要 vcpkg）：
   ```powershell
   $g='D:\MinGW\bin\g++.exe'
+  $vcpkgInc='D:\git\repos\vcpkg\installed\x64-mingw-dynamic\include'
   foreach ($f in 'src/core/core_smoke.cpp','src/core/log/LogManager.cpp','src/core/platform/File.cpp',
                  'src/core/geometry/generator/MeshGen.cpp','src/game/Character.cpp',
                  'src/game/GameLoop.cpp','src/game/InputMapping.cpp','src/render/gl/GLFunctions.cpp',
-                 'src/render/gl/GLContext.cpp','src/render/gl/GLRenderDevice.cpp','src/app/Sandbox.cpp',
+                 'src/render/gl/GLContext.cpp','src/render/gl/GLRenderDevice.cpp',
+                 'src/render/vk/VulkanRenderDevice.cpp','src/app/Sandbox.cpp',
                  'src/platform/win32/Win32Window.cpp','src/platform/win32/Win32Module.cpp') {
-    & $g -std=c++17 -c $f -Isrc -o "$env:TEMP\proof.o"
+    & $g -std=c++17 -c $f -Isrc "-I$vcpkgInc" -o "$env:TEMP\proof.o"
   }
   ```
-  这 13 个文件全部通过 → 全项目没有任何 Qt 残留（`main.cpp` 只多一个 cpr 依赖）
+  这 14 个文件全部通过 → 全项目没有任何 Qt 残留（`main.cpp` 只多一个 cpr 依赖；
+  Vulkan 后端需要 vcpkg 的 `vulkan/vulkan.h`，所以带上 `-I$vcpkgInc`）
 - 单测目标只链 core/engine → 不需要窗口和显卡，`ctest` 0.3 秒跑完三个套件
 - 依赖方向上也做了保护：`Win32Window.h` 刻意**不** include `<windows.h>`（消息处理器用普通整数声明），
   这样 `near`/`far`/`min`/`max` 这类宏不会泄漏进 engine 和 app
@@ -294,6 +312,33 @@ RHI 的 OpenGL 4.3 实现：持有一个 `GLContext` + `GLFunctions`，把 RHI �
 另外提供 `functions()`（GL 函数表）与 `reportErrors(stage)`（读一次 `glGetError` 并写日志）两个后门，
 只给组装根和诊断用；应用逻辑不该碰。
 
+### `VulkanRenderDevice`（src/render/vk/VulkanRenderDevice.h/.cpp）
+RHI 的 Vulkan 1.0 实现。**它是 RHI 形状的来源**——接口就是按这一层的需求定的，换过来几乎只是"填空"：
+
+| RHI | Vulkan |
+|---|---|
+| 创建 | instance（+ Win32 surface 扩展，有验证层就开）→ surface（HWND）→ 物理设备（挑有 graphics+present 队列且支持 swapchain 的，独显优先）→ 逻辑设备+队列 |
+| `createSwapchain` | swapchain（FIFO、B8G8R8A8_UNORM、minImageCount+1）+ image view + 深度图 + render pass（颜色 CLEAR/STORE → PRESENT_SRC，深度 CLEAR/DONT_CARE）+ framebuffer |
+| `beginFrame` | 等本帧 fence → `vkAcquireNextImageKHR` → 复位 fence/命令缓冲 → `vkBeginCommandBuffer` |
+| `clear` | `vkCmdBeginRenderPass`（Vulkan 的清屏是"开始 render pass"的一部分，所以它必须是本帧第一条命令）+ 动态 viewport/scissor |
+| `bindPipeline` | `vkCmdBindPipeline`（深度测试/写掩码固化在 pipeline 里，viewport/scissor 用动态状态，所以 resize 不用重建 pipeline） |
+| `bindVertexBuffer` / `bindIndexBuffer` | `vkCmdBindVertexBuffers` / `vkCmdBindIndexBuffer`（stride 来自 pipeline 的顶点输入描述） |
+| `bindUniformBuffer` | 一组 `UNIFORM_BUFFER_DYNAMIC` 描述符（每帧在飞一个 set）+ `vkCmdBindDescriptorSets` 的**动态偏移** |
+| `drawIndexed` | `vkCmdDrawIndexed` |
+| `endFrame` | `vkQueueSubmit`（等 image_available、给 render_finished 发信号、fence 收尾）+ `vkQueuePresentKHR` |
+| `waitIdle` | `vkDeviceWaitIdle` |
+
+**为什么常量一定要按帧分槽**：Vulkan 允许 2 帧在飞，同一个缓冲如果被下一帧覆写，GPU 可能还在读它。
+所以 `Sandbox` 按 `framesInFlight() × 每帧 draw 数` 分配常量块，块间距用 `uniformBufferAlignment()`
+（本机 256 字节），绑定范围/动态偏移各取所需 —— Vulkan 与 GL 用的是同一套调用。
+
+clamp 空间也是 RHI 告诉应用的：`clipDepth() = ZeroToOne`、`flipY() = true`，应用把它们交给摄像机
+（`Camera::setClipDepth/setFlipY`），所以投影矩阵是**按后端算对的**，而不是在 shader 里打补丁。
+
+v1 有意的简化（都在代码注释里标明）：单队列族（graphics 与 present 同一个家族）、无 MSAA、
+所有 buffer 都是 host-visible coherent 常驻映射（不搞 staging/allocator）、render pass 只在第一次建
+swapchain 时按格式创建一次、present mode 固定 FIFO、resize 时整体重建 swapchain。
+
 ### `Model`（src/game/Model.h → `stv3d_engine`，无 Qt / 无 GPU）
 - 变换：`setPosition` / `getPosition()` / `translate`（`vec3`）、`setRotation(quat)` / `getRotation()` /
   `setRotationDegrees(deg, axis)` / `rotateBy`、`setScale` / `setUniformScale` / `getScale()`
@@ -416,7 +461,8 @@ RHI 的 OpenGL 4.3 实现：持有一个 `GLContext` + `GLFunctions`，把 RHI �
 2. **core / engine 不许碰 Qt / GL / OS 头文件**：`src/core/**` 与 `src/game/**` 里出现 `<Q...>` / `<GL...>` / `<windows.h>` 就是分层破坏（编译期由 `stv3d_core` / `stv3d_engine` 目标挡住）
 3. **数学约定只认 `core/math/conventions.h`**：列主序、弧度、右手系、`T*R*S`、四元数 `{w,x,y,z}`；GL 与 Vulkan 的裁剪空间差异用 `ClipDepth` 参数表达，不要烤进 core
 4. **GPU 资源只通过 `IRenderDevice` 创建/销毁**：拿到的是不透明句柄，销毁前 `waitIdle()`；GL 后端额外要求"上下文 current"（`beginFrame` 之后、`endFrame` 之前最安全）
-5. **应用不许 include 具体后端**：`Sandbox` 只认 `render/rhi/`，唯一写出 `GLRenderDevice` 的地方是 `main.cpp`（A6/A7 加后端时也只改这里）
+5. **应用不许 include 具体后端**：`Sandbox` 只认 `render/rhi/`，唯一写出 `GLRenderDevice`/`VulkanRenderDevice` 的地方是 `main.cpp`（加后端时也只改这里 + CMake）
+15. **新后端的检查清单**：实现 `IRenderDevice` 全部纯虚函数 → 在 `main.cpp` 加一个开关 → CMake 加一个 `stv3d_render_*` 目标 → 用同一套画面回归验证（见 §10）；RHI 里缺什么就补接口，**不要**在应用里特判后端
 6. **顶点属性显式三步**：`glVertexAttribFormat` → `glVertexAttribBinding` → `glBindVertexBuffer`
 7. **朝向用四元数**：不引入欧拉角状态；需要限位就"钳制目标角、只转差值"
 8. **着色器是磁盘上的真实文件**（`shaders/*.vert|frag`，CMake 构建后复制到 exe 旁边）；改 shader 不用重新编译，重启程序即可
@@ -445,6 +491,19 @@ ctest --test-dir build            # 或直接跑 build\stv3d_*_tests.exe
 | `tests/engine_test.cpp` | 摄像机（默认机位、viewMatrix 映射、lookAt、世界/局部旋转、俯仰限位、500 次随机旋转后仍无滚转且正交、moveLocal、**GL/Vulkan 两套投影 + flipY**、fov/aspect 钳制）、模型（S→R→T、`fromTRS` 等价、四元数累积、自转积分、负 dt 不推进）、角色控制器（方向/归一化/疾跑/俯视不出水平面）、角色（TPV 摆放与注视、FPV 眼睛高度与朝向不被覆盖、切模式、轨道限位 ±89°、距离钳制 0.5/100）、**GameLoop**（固定步长整除、累加器余数、10 秒卡顿只补 5 刻且丢弃积压、pause 停逻辑刻但帧照跑、start 恢复、`enqueue` 只跑一次、三种 scheduler 任务、零/负 dt 不推进、非法参数回退）、**InputMapping**（空帧无意图、W/↑ 都是前进、SAD+方向键、Space/E 跳跃意图、Shift 疾跑、F5/R/Esc 都是 edge 不粘滞、关闭按钮也算退出、`clearPerFrame` 清每帧量但保留按键与光标） | 117 |
 | `tests/core_log_test.cpp` | 行格式（`时间戳 [级别] 内容`、逐位校验时间戳）、四个级别的标签、流式拼接（int/`std::string`/bool）、`logFixed`/`logHex` 的精度与状态还原、**4 线程 × 50 行不丢行不串行**、init/shutdown/再 init 的幂等与追加语义、init 之前写 stderr 不丢消息 | 26 |
 | `tests/core_geometry_test.cpp` | 顶点格式尺寸（44 字节，即 pipeline 被告知的 stride）、`MeshData` 的 `empty`/`triangleCount`/`clear`、立方体的顶点/索引数、**索引全在范围内**、**无退化三角形**、**12 个面全部朝外（绕序一致）**、尺寸只改位置不改颜色、法线单位长度且朝外 | 17 |
+
+### 后端怎么验证（每加一个后端都做一次）
+
+单测覆盖不到"画面对不对"，所以后端用**同一套画面回归**检查：启动程序 → 把窗口置顶（DPI-aware +
+`ClientToScreen`）→ 抓客户区 → 统计 clear 色之外的像素按列分组，看三组物体的相对位置；GL 与 Vulkan 的
+结果应落在同一区间。A6 的实测结果：
+
+| | 客户区 | clear 色 | 左立方体 | 中（立方体3+角色） | 右立方体 |
+|---|---|---|---|---|---|
+| `--api gl`（Intel UHD 630） | 800×600 | (25,31,38) | 0.242–0.330 | 0.478–0.522 | 0.655–0.780 |
+| `--api vk`（GTX 1050 Ti） | 800×600 | (25,31,38) | 0.250–0.328 | 0.478–0.522 | 0.658–0.778 |
+
+差别来自 GL 用 4× MSAA、Vulkan v1 是单采样，以及两块 GPU 的光栅化细节；位置一致即视为通过。
 
 ### 迁移前的旧测试（已删除，覆盖面对照）
 
@@ -475,8 +534,8 @@ ctest --test-dir build            # 或直接跑 build\stv3d_*_tests.exe
 | A3 | **Win32 窗口与输入**：`src/platform/win32/{Win32Window,Win32Module}`（`CreateWindowEx` + `WndProc` + 键盘/鼠标/滚轮 → `FrameInput`）+ `core/platform/{Key,FrameInput,NativeWindowHandle}` + 引擎侧 `InputMapping`（可单测） | ✅ 已完成 |
 | A4 | **GL 上下文 + 函数表 + 去 qrc**：`render/gl/{GLContext,GLFunctions}`（WGL 建 4.3 core、手写 X-macro 表、`wglGetProcAddress` + 1.1 回退）、`Mesh/ShaderProgram` 改为注入函数表、着色器改磁盘文件、CMake 删掉 Qt/AUTOMOC/qrc/windeployqt → **Qt 归零** | ✅ 已完成 |
 | A5 | **抽 `IRenderDevice`**：`render/rhi/{RenderTypes,RenderDevice}` 定义显式帧模型（`beginFrame/endFrame`、`ICommandList`、Pipeline/Buffer/Shader 句柄、Swapchain、`NativeWindowHandle`、`ShaderLanguage`），`render/gl/GLRenderDevice` 先实现；`Sandbox` 只认 RHI；`Model` 改为按 `MeshId` 引用几何；core 合并成唯一 `Vertex` 并新增 `MeshGen`（立方体生成器 + 17 项单测）；删掉 `render/Mesh`、`render/ShaderProgram`、死代码 `core/geometry/Mesh.h` 与三个空占位生成器 | ✅ 已完成 |
-| A6 | **Vulkan 后端**：`vcpkg install vulkan-headers vulkan-loader glslang`（本机只有运行时 `vulkan-1.dll`，没有头/导入库），构建期用 `glslangValidator` 把 GLSL 编成 SPIR-V；`render/vk/VulkanRenderDevice` 实现同一套 RHI | ⏭ 下一步 |
-| A7 | **D3D11 后端**：MinGW 自带 `d3d11/dxgi/d3dcompiler` 头与导入库，HLSL 运行时编译（系统自带 `D3DCompiler_47.dll`）；`render/d3d11/D3D11RenderDevice`；RHI 保留将来加 D3D12 的位置 | ⏭ |
+| A6 | **Vulkan 后端**：`render/vk/VulkanRenderDevice` 实现同一套 RHI（instance/surface/device/swapchain/render pass/命令缓冲/信号量/fence/动态偏移常量），`main.cpp` 加 `--api gl|vk`；着色器一份源码两用（构建期 `glslangValidator -V` 出 SPIR-V，SPIR-V 要求显式 location，已补）；RHI 补了 `uniformBufferAlignment()`、`framesInFlight()`、`clipDepth()/flipY()`、带 offset/size 的 `bindUniformBuffer`。**实测两后端画面一致**（见 §10 回归表） | ✅ 已完成 |
+| A7 | **D3D11 后端**：MinGW 自带 `d3d11/dxgi/d3dcompiler` 头与导入库，HLSL 运行时编译（系统自带 `D3DCompiler_47.dll`）；`render/d3d11/D3D11RenderDevice`；RHI 保留将来加 D3D12 的位置 | ⏭ 下一步 |
 
 **已完成的 Qt 阶段（历史）**
 
@@ -497,9 +556,11 @@ ctest --test-dir build            # 或直接跑 build\stv3d_*_tests.exe
 - 网格只有立方体一种；`MeshGen` 可继续加球/平面，或写 OBJ 读取器
 - **立方体绕序是 A5 才修好的**：原来 back/right/top 三个面的三角形绕反了（没开背面剔除所以看不出来），
   新的几何单测把它们抓了出来；现在六个面统一 CCW 朝外，将来开 `GL_CULL_FACE` 可以直接用
-- **RHI v1 的取舍**：逐 draw 覆写同一个常量缓冲 —— GL 下没问题（调用立即生效），但 Vulkan/D3D12 的
-  "帧在飞"模型下不行，A6/A7 要换成环形缓冲或 dynamic offset（`Sandbox::drawModel` 里有注释标注）
-- `PipelineDesc` 目前只有深度测试/写掩码，没有剔除模式、混合、多渲染目标——按需再加，不要预先设计
+- **RHI v1 的取舍**：常量按"每 draw × 每帧在飞"分槽（Vulkan 必须如此），但每帧仍只用一个 command list、
+  一个顶点/索引缓冲、一条 pipeline；`PipelineDesc` 目前只有深度测试/写掩码，没有剔除模式、混合、多渲染目标——按需再加
+- **Vulkan 后端的已知简化**：无 MSAA（GL 侧是 4×）、所有 buffer 走 host-visible coherent 常驻映射、
+  单队列族、present mode 固定 FIFO、整个 swapchain 在 resize 时重建、render pass 只按第一次的交换链格式建一次
+- **Vulkan 验证层**：装了 `VK_LAYER_KHRONOS_validation` 就会自动开启（日志里会写一行），没装则静默跳过
 - `src/core/geometry/generator/VertexGen.h` 里的 `void VertexGen()` 仍是空壳
 - **注释语言**：源码注释与日志文案已统一为英文；本 README 按你的要求保持中文
 - 阴影、光照、纹理、实例化（`glDrawElementsInstanced`）都还没做
