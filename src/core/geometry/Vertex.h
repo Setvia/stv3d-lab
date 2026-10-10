@@ -6,12 +6,11 @@
 #include "core/math/vec2.h"
 #include "core/math/vec3.h"
 
-// The one and only CPU-side vertex format.
+// The CPU-side vertex format.
 //
-// There used to be two of these (a core one with pos/norm/uv and a render one with position/color);
-// they are merged here so that a generator, a loader and any render backend all agree on the layout.
-// A backend describes how these fields map onto shader attributes (see rhi::VertexAttribute), so the
-// struct itself stays API-agnostic.
+// A generator, a loader and every render backend agree on this one layout. A backend describes how
+// these fields map onto shader attributes (see rhi::VertexAttribute), so the struct itself stays
+// API-agnostic.
 struct Vertex
 {
     vec3 position;  // object space

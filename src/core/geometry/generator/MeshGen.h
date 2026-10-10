@@ -7,7 +7,7 @@
 
 // CPU-side geometry generators.
 //
-// Generators live in core on purpose: they produce plain MeshData and know nothing about which
+// Generators live in core: they produce plain MeshData and are independent of the graphics API that
 // graphics API will upload it. That also makes them unit-testable without a window (see
 // tests/core_geometry_test.cpp).
 namespace MeshGen

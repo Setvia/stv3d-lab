@@ -12,11 +12,10 @@
 #include <string>
 #include <vector>
 
-// The demo scene - what used to be GLWidget, minus the window and minus the graphics API.
+// The demo scene: scene assembly, input handling and one frame of drawing.
 //
-// It talks to IRenderDevice only: buffers, shaders, a pipeline and a command list. Which API is
-// behind that interface (OpenGL today, Vulkan or D3D11 later) is not visible here, and the CPU-side
-// geometry it uploads comes from core (MeshGen) rather than from a backend-specific mesh class.
+// It talks to IRenderDevice only - buffers, shaders, a pipeline and a command list - so the graphics
+// API behind the interface is not visible here, and the geometry it uploads comes from core (MeshGen).
 class Sandbox
 {
 public:

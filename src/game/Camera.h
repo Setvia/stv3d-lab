@@ -17,7 +17,7 @@ enum class CameraView
     TPV  // orbit camera
 };
 
-// Camera: pure math, no Qt and no OpenGL calls.
+// Camera: pure math.
 //
 // Orientation is a unit quaternion - no Euler angles (yaw/pitch/roll) and no stored
 // target/up. The quaternion rotates the camera's local frame into world space, with the
@@ -194,7 +194,7 @@ private:
 
     float fov_y = 90.0f;
     float aspect = 1.0f;
-    // Note: `near` and `far` are macros defined by <windows.h> (pulled in through Qt),
+    // Note: `near` and `far` are macros defined by <windows.h>,
     // so these members carry explicit plane names.
     float near_plane = 0.1f;
     float far_plane = 100.0f;

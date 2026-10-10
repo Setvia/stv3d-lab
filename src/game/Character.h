@@ -6,7 +6,7 @@
 
 // Character controller: turns "key intents" into a world-space displacement.
 //
-// The controller deliberately does NOT own a position - the caller passes one by
+// The controller does not own a position - the caller passes one by
 // reference. That keeps the state explicit, lets the same controller drive any body and
 // makes it trivially unit-testable.
 class CharacterController

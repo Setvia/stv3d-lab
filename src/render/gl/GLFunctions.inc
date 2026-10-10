@@ -1,14 +1,14 @@
 // X-macro list of every OpenGL entry point this project uses.
 //
-// Included twice on purpose:
+// Included twice:
 //   * GLFunctions.h  - to declare one member per entry point
 //   * GLFunctions.cpp - to resolve them through wglGetProcAddress
 // Keeping a single list means the table can never drift out of sync with the members.
 //
 // X(function pointer type, name)
 //
-// The types come from <GL/glcorearb.h>, i.e. the core profile only: no legacy entry point is
-// reachable through this table by construction.
+// The types come from <GL/glcorearb.h> (core profile), so only core entry points are reachable
+// through this table.
 
 // ---- shaders and programs ----
 X(PFNGLCREATESHADERPROC, glCreateShader)

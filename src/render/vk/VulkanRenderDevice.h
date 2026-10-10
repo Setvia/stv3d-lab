@@ -16,7 +16,7 @@
 // with dynamic offsets (one block per draw, per frame in flight), and clip space is handed to the app
 // as [0,1] with +Y down.
 //
-// Deliberate v1 simplifications (all documented where they matter):
+// v1 simplifications (documented where they matter):
 //   * one queue family that supports both graphics and present
 //   * single-sample attachments (no MSAA yet)
 //   * every buffer lives in host-visible coherent memory and stays mapped (no staging, no allocator)

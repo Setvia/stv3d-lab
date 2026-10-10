@@ -6,9 +6,9 @@
 
 // The Win32 window: window class, message pump and input collection.
 //
-// This is what replaced QOpenGLWidget. It deliberately does NOT create a GL context - that is the
-// render layer's job (see render/gl/GLContext.h) - it only provides the HWND, pumps messages and
-// reports input, which is also exactly what a Vulkan or D3D backend needs.
+// It provides the HWND, pumps messages and reports input; creating a graphics context is the render
+// layer's job (see render/gl/GLContext.h). Keeping those apart is what lets the same window serve the
+// OpenGL, Vulkan and D3D11 backends.
 //
 // This header does not include <windows.h>: the message handler is spelled with plain integers
 // (see handleMessage) so that the classic macro landmines (`near`, `far`, `min`, `max`) cannot leak

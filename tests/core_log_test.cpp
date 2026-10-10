@@ -1,7 +1,7 @@
 // Unit tests for the dependency-free logging layer (core/log).
 //
-// This target links nothing but stv3d_core: no Qt, no OpenGL, no window. Together with
-// core_smoke.cpp it acts as a guard - if LogManager ever grows a Qt include, this stops building.
+// This target links only stv3d_core: no window, no graphics API. Together with
+// core_smoke.cpp it acts as a guard: if logging ever grows a dependency, this stops building.
 //
 // The tests read the produced file back and check the exact line format, because the log is the
 // main verification tool for the renderer: a broken format means broken regression comparisons.
@@ -90,7 +90,7 @@ bool digitsAt(const std::string& line, std::size_t pos, std::size_t count)
     return true;
 }
 
-// "YYYY-MM-DD HH:MM:SS.mmm" - 23 characters, the same layout the Qt version produced
+// "YYYY-MM-DD HH:MM:SS.mmm" - 23 characters, the layout the log format uses
 bool startsWithTimestamp(const std::string& line)
 {
     return digitsAt(line, 0, 4) && line[4] == '-' && digitsAt(line, 5, 2) && line[7] == '-'

@@ -4,9 +4,9 @@
 #include <sstream>
 #include <string>
 
-// Dependency-free logging for the whole project: no Qt, no third-party code, std only.
+// Logging for the whole project: standard library only.
 //
-// A log line looks like this (same format the Qt version produced):
+// A log line looks like this:
 //     2026-10-05 22:11:53.506 [INFO] shader program ready: id = 3 | vertex: shaders/basic.vert
 //
 // Usage:
@@ -22,7 +22,7 @@
 //     so logging from several threads is safe and lines never interleave.
 //   * Before init() (or after a failed init) messages go to stderr instead of being dropped:
 //     silence would be worse than an unstyled line.
-//   * init() takes the path as an argument on purpose. Resolving "the directory of the exe" is a
+//   * init() takes the path as an argument. Resolving "the directory of the exe" is a
 //     platform question (GetModuleFileNameW on Windows), so it belongs to the app/platform layer,
 //     not to core.
 
@@ -79,7 +79,7 @@ public:
     static bool isReady();
 
     // Write one complete line (timestamp + level + message + newline).
-    // Called by ~LogStream(), but usable directly - the Qt bridge in main.cpp does exactly that.
+    // Called by ~LogStream(), and usable directly.
     static void write(LogLevel level, const std::string &message);
 
 private:

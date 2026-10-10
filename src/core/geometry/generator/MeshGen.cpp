@@ -31,8 +31,7 @@ MeshData makeCube(float size)
 
     // Every face lists its four corners counter-clockwise as seen from OUTSIDE, split into two
     // triangles that share the 1-3 diagonal. Winding correctness matters as soon as face culling is
-    // switched on - and the inherited version of this list had three faces (back, right, top) wound
-    // the wrong way round, which the geometry unit test caught.
+    // switched on, and the geometry unit test checks it.
     mesh.indices = {
         0, 3, 2, 2, 1, 0,  // back   (z = -h)
         4, 5, 6, 6, 7, 4,  // front  (z = +h)

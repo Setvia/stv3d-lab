@@ -1,6 +1,6 @@
 // Unit tests for the CPU-side geometry layer (core/geometry).
 //
-// This target links nothing but stv3d_core: no window, no GPU, no graphics API. Generators produce
+// This target links only stv3d_core: no window, no GPU. Generators produce
 // plain MeshData - that is exactly what makes them testable here, and what lets the same cube be
 // uploaded to OpenGL today and to Vulkan or D3D11 later.
 

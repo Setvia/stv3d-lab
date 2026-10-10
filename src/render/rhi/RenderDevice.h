@@ -12,19 +12,20 @@
 //     OpenGL's immediate state machine is mapped onto that shape (its command list is "issue the
 //     calls now"), because the reverse - designing around GL and bolting Vulkan on later - does not
 //     work.
-//   * Resources are opaque handles, never API objects, so the app cannot accidentally depend on the
-//     backend it happens to run on.
+//   * Resources are opaque handles rather than API objects, so the app cannot accidentally depend on
+//     the backend it happens to run on.
 //   * Shaders are blobs: the device says which dialect it wants (ShaderLanguage), the app hands over
 //     bytes. A backend switch therefore means loading a different shader file, not editing app code.
 //
-// Status (step A5): the OpenGL backend implements this. Vulkan (A6) and D3D11 (A7) follow, and the
-// app is expected to need no changes beyond picking a device at startup.
+// The OpenGL, Vulkan and D3D11 backends implement this; the app picks one at startup and needs no
+// other change.
 
 // Everything recorded for one frame.
 //
 // OpenGL: begin()/end() only toggle a flag - GL calls take effect immediately, which is exactly why
 // the interface does not allow recording outside begin()/end(): Vulkan and D3D12 would silently
 // misbehave, so the contract is enforced from the start.
+
 class ICommandList
 {
 public:

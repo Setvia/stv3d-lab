@@ -1,8 +1,8 @@
 // Unit tests for the engine layer: camera, model instances, the character controller and the loop.
 //
-// These link only stv3d_engine (which links only stv3d_core): no Qt, no OpenGL, no window.
+// These link only stv3d_engine (which links only stv3d_core): no window, no graphics API.
 // They exist because Camera/Model/Character/GameLoop were converted to core types - as long as
-// this executable builds, those files are free of Qt.
+// this executable builds, the engine stays within core and the standard library.
 
 #include "game/Camera.h"
 #include "game/Character.h"

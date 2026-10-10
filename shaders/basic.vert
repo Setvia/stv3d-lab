@@ -10,8 +10,7 @@ layout(location = 0) in vec3 aPosition;
 layout(location = 1) in vec3 aColor;
 
 // One constant block per draw, std140, bound to slot 0.
-// The same block shape is what Vulkan (uniform buffer) and D3D11 (cbuffer) will consume, which is
-// why the demo no longer uses individual uniforms.
+// The same block shape is what the Vulkan (uniform buffer) and D3D11 (cbuffer) backends bind.
 layout(std140, binding = 0) uniform Scene
 {
     mat4 uMvp;

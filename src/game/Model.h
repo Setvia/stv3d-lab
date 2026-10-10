@@ -7,10 +7,10 @@
 
 #include <cstdint>
 
-// Which geometry a model draws: an index into the geometry table owned by the app, which in turn
-// owns the render resources. The engine deliberately does not know how that geometry is stored - CPU
-// MeshData, GPU buffers, an atlas - which is what keeps Camera/Model/Character independent of the
-// render backend (and testable without a device).
+// Which geometry a model draws: an index into the geometry table owned by the app, which owns the
+// render resources. How that geometry is stored (CPU MeshData, GPU buffers, an atlas) is the
+// renderer's business, which keeps Camera/Model/Character independent of the render backend and
+// testable without a device.
 using MeshId = std::uint32_t;
 
 constexpr MeshId kNoMesh = 0xFFFFFFFFu;
@@ -18,7 +18,7 @@ constexpr MeshId kNoMesh = 0xFFFFFFFFu;
 // A model instance = a reference to geometry + its own transform (position/rotation/scale) + an
 // optional spin. Several models can share one geometry while their transforms stay independent.
 //
-// Pure math with no Qt, no OpenGL and no device, so it can be unit-tested without a window.
+// Pure math with no device, so it can be unit-tested without a window.
 // The model matrix is always composed as T * R * S (see core/math/conventions.h).
 class Model
 {

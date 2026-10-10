@@ -77,6 +77,7 @@ int main(int argc, char **argv)
     VulkanRenderDevice vk_device;
     D3D11RenderDevice d3d11_device;
 
+    // const bool use_opengl = requested_api == "gl" || requested_api == "opengl";
     const bool use_vulkan = requested_api == "vk" || requested_api == "vulkan";
     const bool use_d3d11 = requested_api == "d3d11" || requested_api == "d3d" || requested_api == "dx11";
 
@@ -147,7 +148,7 @@ int main(int argc, char **argv)
         gl_device.reportErrors("after scene creation");
     }
 
-    // Network request test (kept from the Qt era: it only proves the cpr dependency works)
+    // Network request test: proves the cpr dependency works
     const cpr::Response response = cpr::Get(cpr::Url{"https://httpbin.org/get"});
     LOG_INFO() << "Status: " << response.status_code;
     LOG_INFO() << "Content: " << response.text;

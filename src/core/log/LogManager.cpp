@@ -7,22 +7,17 @@
 #include <ctime>
 #include <fstream>
 #include <iomanip>
-#include <mutex>   // only for std::lock_guard; std::mutex itself is deliberately not used (see SpinLock)
+#include <mutex>   // only for std::lock_guard; the lock itself is the SpinLock below
 #include <thread>
 
 namespace
 {
 
-// A tiny spin lock instead of std::mutex - on purpose, and this is the reason:
+// A tiny spin lock instead of std::mutex.
 //
-// std::mutex drags the pthread_mutex_* symbols into the link. On this machine that means the STATIC
-// libpthread.a, while vcpkg's libcpr.dll.a already re-exports the very same winpthread symbols, so
-// the link fails with "multiple definition of pthread_mutex_lock". Putting -lwinpthread first fixes
-// the link but embeds a second pthread implementation beside the libwinpthread-1.dll that Qt itself
-// uses - two runtimes in one process, which is exactly the kind of bug that surfaces much later.
-//
-// Logging only ever guards a very short critical section (assemble one line, write it, flush), so an
-// atomic flag is sufficient, needs no library at all and keeps the linker out of that fight.
+// The guarded section is one short line (assemble a line, write it, flush), so an atomic flag is
+// enough - and staying clear of pthread_mutex_* keeps threading-library symbols out of the link,
+// where they clash with the same symbols exported by the third-party DLL import libraries.
 class SpinLock
 {
 public:

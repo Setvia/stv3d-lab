@@ -6,27 +6,25 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 # ---------------------------------------------------------------------------
-# Layered targets. The dependency direction is strictly downward and there is
-# no Qt anywhere any more - the window is Win32 and the GL context is WGL:
+# Layered targets. The dependency direction is strictly downward:
 #
 #   stv3d_core            math, CPU geometry and the platform-independent value
 #                         types (Key, FrameInput, NativeWindowHandle).
-#                         Links NOTHING - not even the OS: a Qt/GL/OS include in
-#                         a core header fails to compile, so the layering is
-#                         enforced by the build, not by review.
+#                         Links only the C++ standard library: a third-party or
+#                         OS include in a core header fails to compile, so the
+#                         layering is enforced by the build, not by review.
 #   stv3d_engine          scene logic: camera, model instances, character, game
 #                         loop, input mapping. Links only stv3d_core.
 #   stv3d_platform_win32  the window: class registration, message pump, input.
-#   stv3d_render_gl       OpenGL 4.3 backend: WGL context, hand-written function
-#                         table, mesh, shader program.
-#   stv3d-lab             the executable: assembly root (window + context + scene).
+#   stv3d_render          the RHI: IRenderDevice / ICommandList (header-only).
+#   stv3d_render_gl       OpenGL 4.3 backend (WGL context, function table).
+#   stv3d_render_vk       Vulkan backend.
+#   stv3d_render_d3d11    Direct3D 11 backend.
+#   stv3d-lab             the executable: assembly root (window + device + scene).
 #   stv3d_*_tests         unit tests for core/engine (no window, no GPU needed).
-#
-# Future steps: stv3d_render_vk / stv3d_render_d3d11 (same shape as
-# stv3d_render_gl), and an IRenderDevice that all three implement.
 # ---------------------------------------------------------------------------
 
-# ---- stv3d_core: zero third-party dependencies -----------------------------
+# ---- stv3d_core: the C++ standard library and nothing else -----------------
 add_library(stv3d_core STATIC
     src/core/core_smoke.cpp
     src/core/log/LogManager.cpp
@@ -49,15 +47,14 @@ add_library(stv3d_core STATIC
     src/core/geometry/generator/MeshGen.cpp
     src/core/geometry/generator/MeshGen.h
 )
-# Logging uses a small atomic spin lock rather than std::mutex, so no pthread symbol is referenced.
-# Reason: the posix thread model makes g++ pass an implicit -lpthread, which on MinGW resolves to the
-# STATIC libpthread.a, and vcpkg's libcpr.dll.a re-exports the same winpthread symbols - linking both
-# fails with "multiple definition of pthread_mutex_lock". That is why there is no find_package(Threads)
-# and no -lpthread anywhere here (adding either one brings the conflict straight back).
+# Logging guards its file with an atomic spin lock rather than std::mutex, which keeps pthread symbols
+# out of this target's link: the toolchain's pthread library and the import libraries of the
+# third-party DLLs do not coexist. Adding find_package(Threads) or -lpthread here would bring that
+# conflict back.
 target_include_directories(stv3d_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
-# NOTE: deliberately NO Qt, NO OpenGL and NO OS headers here - only the C++ standard library.
+# NOTE: no include directories are added, so only the C++ standard library is reachable from here.
 
-# ---- stv3d_engine: scene logic, Qt-free and window-free -------------------
+# ---- stv3d_engine: scene logic, no window and no graphics API --------------
 add_library(stv3d_engine STATIC
     src/game/Camera.h
     src/game/Model.h
@@ -77,13 +74,13 @@ add_library(stv3d_platform_win32 STATIC
     src/platform/win32/Win32Window.cpp
     src/platform/win32/Win32Window.h
 )
-# The implementation includes <windows.h>, but the public header deliberately does not, so nothing
-# above it inherits the classic `near`/`far`/`min`/`max` macros.
+# The implementation includes <windows.h>; the public header exposes plain integers instead, so
+# nothing above it inherits the classic `near`/`far`/`min`/`max` macros.
 target_link_libraries(stv3d_platform_win32 PUBLIC stv3d_core PRIVATE user32 gdi32)
 
 # ---- stv3d_render: the RHI, backend-independent ---------------------------
-# Header-only interface target: every backend (gl/, and later vk/ and d3d11/) implements it, and the
-# app links it instead of any particular API.
+# Header-only interface target: each backend (gl/, vk/, d3d11/) implements it, and the app links it
+# instead of any particular API.
 add_library(stv3d_render INTERFACE)
 target_link_libraries(stv3d_render INTERFACE stv3d_core)
 target_sources(stv3d_render INTERFACE
@@ -104,7 +101,7 @@ add_library(stv3d_render_gl STATIC
 target_link_libraries(stv3d_render_gl PUBLIC stv3d_render PRIVATE opengl32 gdi32)
 
 # ---- stv3d_render_vk: Vulkan backend --------------------------------------
-# Dependencies come from vcpkg (this machine has no Vulkan SDK):
+# Dependencies come from vcpkg:
 #   vcpkg install vulkan-headers vulkan-loader "glslang[tools]" \
 #         --triplet x64-mingw-dynamic --host-triplet x64-mingw-dynamic --recurse
 set(_vcpkg_installed "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
@@ -178,7 +175,7 @@ if(TARGET stv3d-spirv)
     add_dependencies(stv3d-lab stv3d-spirv)
 endif()
 
-# ---- unit tests: no window, no GPU, no Qt ---------------------------------
+# ---- unit tests: no window, no GPU ----------------------------------------
 enable_testing()
 add_executable(stv3d_core_tests tests/core_math_test.cpp)
 target_link_libraries(stv3d_core_tests PRIVATE stv3d_core)
@@ -193,15 +190,14 @@ add_executable(stv3d_core_geometry_tests tests/core_geometry_test.cpp)
 target_link_libraries(stv3d_core_geometry_tests PRIVATE stv3d_core)
 add_test(NAME core_geometry COMMAND stv3d_core_geometry_tests)
 
-# The logging test also proves that core/log needs nothing but the standard library
+# The logging test also proves that core/log stays within the standard library
 add_executable(stv3d_core_log_tests tests/core_log_test.cpp)
 target_link_libraries(stv3d_core_log_tests PRIVATE stv3d_core)
 add_test(NAME core_log COMMAND stv3d_core_log_tests)
 
 # ---- runtime deployment (Windows) ---------------------------------------
-# Shaders are real files on disk (the Qt resource system is gone), and they are deployed by an
-# always-run target rather than a POST_BUILD step: editing a shader must not require the executable
-# to relink before the change is visible.
+# Shaders are files on disk, deployed by an always-run target rather than a POST_BUILD step: editing a
+# shader must not require the executable to relink before the change is visible.
 set(_shader_copy_commands)
 if(STV3D_SPV_FILES)
     list(APPEND _shader_copy_commands

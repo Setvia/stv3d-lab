@@ -51,14 +51,13 @@ private:
 
 // Game main loop: fixed-step logic ticks plus one frame step.
 //
-// No Qt and no window: this class owns neither a timer nor an event loop. The platform layer (Qt
-// today, the Win32 message pump from step A3 on) owns those and calls advance() once per turn of its
-// pump. Splitting the time source out that way also makes the loop testable: advanceBy() takes the
-// elapsed time as an argument, so the accumulator can be exercised with exact numbers instead of
-// sleeping in a test.
+// The platform layer owns the timer and the event loop (the Win32 message pump) and calls advance()
+// once per turn of its pump. Splitting the time source out that way also makes the loop testable:
+// advanceBy() takes the elapsed time as an argument, so the accumulator can be exercised with exact
+// numbers instead of sleeping in a test.
 //
-// Note: there is deliberately no blocking `while (state) { ... }` loop. The event pump must keep
-// running, otherwise the window stops responding; the loop is advanced from the pump instead.
+// Note: there is no blocking `while (state) { ... }` loop - the event pump must keep running,
+// otherwise the window stops responding; the loop is advanced from the pump instead.
 class GameLoop
 {
 public:
@@ -80,7 +79,7 @@ public:
 
     TaskScheduler &getScheduler() { return scheduler; }
 
-    // Callbacks replace the Qt signals the loop used to emit
+    // Invoked by the loop: once per logic tick, and once per frame
     void setTickCallback(TickCallback callback) { tick_callback = std::move(callback); }
     void setFrameCallback(FrameCallback callback) { frame_callback = std::move(callback); }
 

@@ -1,11 +1,11 @@
-// Unit tests for the Qt-free, GPU-free core layer.
+// Unit tests for the core layer: math and geometry, no window and no GPU.
 //
-// These tests link nothing but stv3d_core: no Qt, no OpenGL, no window. If they ever
-// stop building, something leaked a Qt/GL dependency into core.
+// This target links only stv3d_core: no window, no graphics API. If it stops building, a dependency
+// leaked into core.
 //
 // Every expectation is written with explicit numbers (hand-derived from the
 // conventions in core/math/conventions.h) instead of comparing against a
-// third-party library, so the tests stay meaningful after Qt is gone.
+// third-party library, so the expectations stay independent of any library.
 
 #include "core/math/conventions.h"
 #include "core/math/mat3.h"

@@ -9,12 +9,9 @@
 
 #include "Vertex.h"
 
-// CPU-side geometry only: this is what a generator or a loader produces and what a
-// render backend consumes. It deliberately holds NO GPU handles - the backend owns
-// those (see render/Mesh.h for the OpenGL implementation, and the planned Vulkan one).
-//
-// Keeping this type GPU-agnostic is what allows the same generated/loaded mesh to be
-// uploaded to OpenGL today and to Vulkan later without touching the generators.
+// CPU-side geometry: what a generator or a loader produces and what a render backend consumes.
+// GPU handles stay in the render layer, so the same generated or loaded mesh can be uploaded by any
+// backend without touching the generators.
 struct MeshData
 {
     std::vector<Vertex> vertices;

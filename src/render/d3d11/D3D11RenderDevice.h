@@ -29,9 +29,9 @@ struct ID3D11RasterizerState;
 //   * D3D11 has an immediate context, so its command list is "issue the calls now" like OpenGL; the
 //     begin()/end() contract is still honoured.
 //   * Per-draw constants: every (uniform buffer, byte offset) block gets its own small constant
-//     buffer. D3D11's ranged binding (ID3D11DeviceContext1::*SetConstantBuffers1 with a non-zero
-//     FirstConstant) silently delivered wrong data on this machine's Intel driver, and the extra
-//     buffers cost a few dozen bytes each - see D3D11RenderDevice::constantBlockBuffer.
+//     buffer. Ranged binding through ID3D11DeviceContext1::*SetConstantBuffers1 with a non-zero
+//     FirstConstant is not portable across drivers, and the extra buffers cost a few dozen bytes each
+//     - see D3D11RenderDevice::constantBlockBuffer.
 //   * Clip space is [0,1] like Vulkan but +Y is up like OpenGL, so flipY() is false here.
 //   * Shaders are HLSL compiled at runtime with D3DCompile (d3dcompiler_47.dll ships with Windows);
 //     the entry point names are the fixed convention VSMain / PSMain.

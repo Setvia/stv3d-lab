@@ -1,8 +1,8 @@
 // Compile-time guard for the `stv3d_core` target.
 //
 // This translation unit includes the whole core layer and is built into a target that
-// links NEITHER Qt NOR OpenGL. If somebody adds `#include <Q...>` or `#include <GL...>`
-// to a core header, this file stops compiling: the layering violation is caught by the
+// links only the C++ standard library. If a core header grows a third-party or OS
+// include, this file stops compiling: the layering violation is caught by the
 // build instead of by review.
 //
 // It also pins down the layout of the math types, because the render backends rely on
@@ -34,7 +34,7 @@ static_assert(sizeof(quat) == 4 * sizeof(float), "quat must stay tightly packed"
 static_assert(sizeof(Vertex) == sizeof(vec3) * 3 + sizeof(vec2),
               "Vertex layout is described to the GPU by the render backend (position, color, normal, uv)");
 static_assert(static_cast<int>(LogLevel::Fatal) == 4,
-              "LogLevel stays a plain 0..4 enum: the level order is relied upon by the log and the Qt bridge");
+              "LogLevel stays a plain 0..4 enum: the level order is relied upon by the level tags");
 
 namespace
 {

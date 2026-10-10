@@ -584,11 +584,9 @@ void D3D11RenderDevice::updateBuffer(BufferHandle buffer, const void *data, std:
     }
 }
 
-// D3D11 cannot bind a range of a constant buffer reliably: ID3D11DeviceContext1::*SetConstantBuffers1
-// with a non-zero FirstConstant silently delivered the wrong data on this machine's Intel driver
-// (measured: the same draw renders correctly when the whole buffer is bound). Each block therefore
-// gets a small dedicated constant buffer, created on first use and rebound whole - which is also why
-// no ID3D11DeviceContext1 is needed at all.
+// Ranged constant binding (ID3D11DeviceContext1::*SetConstantBuffers1 with a non-zero FirstConstant)
+// is not portable across drivers, so each block gets a small dedicated constant buffer, created on
+// first use and rebound whole. That also keeps the backend independent of D3D11.1.
 ID3D11Buffer *D3D11RenderDevice::constantBlockBuffer(BufferSlot &slot, std::uint32_t offset,
                                                      std::uint32_t size)
 {

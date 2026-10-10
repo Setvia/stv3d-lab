@@ -7,11 +7,11 @@
 #include <string>
 #include <vector>
 
-// Whole-file reading, std-only (no Qt, no OS API).
+// Whole-file reading, standard library only.
 //
-// Shaders are read this way (GLSL text today, SPIR-V blobs from step A6 on), which is why both a
-// text and a binary variant exist. Failures are logged and reported as false; callers decide whether
-// that is fatal.
+// Shaders are read this way (GLSL or HLSL text, SPIR-V binaries), which is why both a text and a
+// binary variant exist. Failures are logged and reported as false; callers decide whether that is
+// fatal.
 namespace File
 {
 
