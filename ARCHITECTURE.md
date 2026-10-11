@@ -184,7 +184,7 @@ flowchart LR
 | `src/core/platform/*` | core | 平台无关值类型 + 文件读取 | `Key`、`FrameInput`、`NativeWindowHandle`、`File` |
 | `src/core/log/*` | core | 日志（std-only） | `LogManager`、`LogStream`、`LOG_*` |
 | `src/*/{physics,loader,ecs,render/resources}` | — | 占位头文件，尚未实现 | — |
-| `tests/*.cpp` | 各测试目标 | 227 项检查（见 §12） | — |
+| `tests/*.cpp` | 各测试目标 | 224 项检查（见 §12） | — |
 | `shaders/basic.vert/.frag/.hlsl` | 资源 | 一份逻辑，三种方言 | — |
 
 ---
@@ -267,7 +267,6 @@ stateDiagram-v2
 | 时间相关的量 | 默认 | 说明 |
 |---|---|---|
 | `fixed_tick_seconds` | `1/60` | 逻辑刻步长；`setFixedTickSeconds` 只接受 > 0 |
-| `frame_interval_ms` | `16` | 给平台泵的**建议**间隔，循环自己从不等待 |
 | 每步最多补刻数 | `5` | 超过就丢弃积压（防死亡螺旋） |
 | `tick_accumulator` | — | 不足一刻的余量，`getTickAccumulator()` 给测试用 |
 
@@ -632,14 +631,12 @@ classDiagram
         -deque~Task~ task_queue
         -TaskScheduler scheduler
         -steady_clock::time_point last_time
-        -int frame_interval_ms = 16
         -uint64 tick_count
         -double tick_accumulator, fixed_tick_seconds = 1/60
         +init() / start() / pause() / exit()
         +getState() / isActive() / getTickCount()
         +getScheduler() TaskScheduler
         +setTickCallback(cb) / setFrameCallback(cb)
-        +setFrameInterval(ms) / getFrameInterval()
         +getFixedTickSeconds() / setFixedTickSeconds(s)
         +getTickAccumulator() double
         +enqueue(task)
@@ -666,7 +663,6 @@ classDiagram
 | 量 | 值 | 位置 |
 |---|---|---|
 | 逻辑刻 | `1/60 s` | `GameLoop::fixed_tick_seconds` |
-| 帧间隔建议 | `16 ms` | `GameLoop::frame_interval_ms` |
 | 补刻上限 | `5` | `GameLoop.cpp` `kMaxSubSteps` |
 | 行走 / 疾跑 | `5 / 9 m/s` | `CharacterController::Speeds` |
 | FPV 眼高 | `1.6 m` | `Character::eye_height` |
@@ -763,14 +759,14 @@ flowchart LR
 
 ## 12. 测试与验证
 
-### 12.1 单测（`ctest` 4 套，共 227 项）
+### 12.1 单测（`ctest` 4 套，共 224 项）
 
 | 套件 | 链接 | 覆盖 | 检查项 |
 |---|---|---|---|
 | `tests/core_math_test.cpp` | 仅 `stv3d_core` | 列主序布局、`fromTRS` 的 S→R→T、`lookAt` 退化、透视两套裁剪空间、`ortho`、四元数、mat3/mat4 逆与行列式 | 67 |
 | `tests/core_log_test.cpp` | 仅 `stv3d_core` | 行格式与时间戳、级别标签、流式拼接、`logFixed/logHex`、**4 线程 × 50 行不丢不串**、init/shutdown 幂等与追加 | 26 |
 | `tests/core_geometry_test.cpp` | 仅 `stv3d_core` | 顶点 44 字节、`MeshData` 语义、立方体顶点/索引数、索引在范围内、无退化三角形、**12 面绕序一致朝外**、尺寸只改位置、法线单位且朝外 | 17 |
-| `tests/engine_test.cpp` | 仅 `stv3d_engine` | Camera（含 500 次随机旋转后无滚转且正交）、Model、Character/Controller、**GameLoop**（累加器余数、10 秒卡顿只补 5 刻、pause/start、enqueue、非法参数）、**InputMapping**（edge 不粘滞、clearPerFrame 语义） | 117 |
+| `tests/engine_test.cpp` | 仅 `stv3d_engine` | Camera（含 500 次随机旋转后无滚转且正交）、Model、Character/Controller、**GameLoop**（累加器余数、10 秒卡顿只补 5 刻、pause/start、enqueue、非法参数）、**InputMapping**（edge 不粘滞、clearPerFrame 语义） | 114 |
 
 ### 12.2 后端画面回归（单测覆盖不到的部分）
 
@@ -814,6 +810,7 @@ flowchart LR
 | 多 pass / 离屏 | `IRenderDevice` 加 render target 概念（GL FBO / VK framebuffer / D3D11 RTV 组合） |
 | 多线程录制 | `getCommandList()` 改为 `createCommandList()` 池化（Vulkan/D3D12 才真正受益） |
 | 场景/渲染队列 | 现在 `Sandbox::render` 线性遍历模型；按 pipeline/材质分组即可升级为队列 |
+| 限帧（目标帧率） | 帧率现在由 vsync 决定（`swapchain_desc.vsync` → GL `wglSwapIntervalEXT` / VK `FIFO` / D3D11 `Present(1)`）。限帧属于**循环**而不属于引擎层：在 `main.cpp` 的 `while (window.pumpMessages())` 里，`advance()` 之后按 `steady_clock` 判断本帧是否早于目标间隔，早到就等到目标时刻。等待用 `Sleep(1)` 时注意默认系统时钟粒度约 15.6 ms，需要 `timeBeginPeriod(1)` 或 `CreateWaitableTimerEx`；如果 `vsync` 为 true，限帧只会把帧率往下压，值为刷新率的整除数才平滑 |
 | 资源自动 barrier | 引入 RenderGraph（RHI 之上的一层），不在 RHI 内做 |
 
 ---
@@ -827,6 +824,7 @@ flowchart LR
 | D3D11 | 无 MSAA；每个常量块一个专用缓冲（见 §7.4）；RTV/DSV 在交换链创建时建一次；若将来出现黑屏或撕裂，第一处该查的就是 flip 模型下 back buffer 的重取时机 |
 | OpenGL | 4×MSAA；core profile（禁一切 legacy） |
 | 引擎 | 角色只有水平移动（无重力/跳跃/碰撞）；`GameLoop::pause/exit` 已测但应用未接（可绑暂停键） |
+| 帧率 | 渲染帧率由 vsync 决定（逻辑刻恒为 60 Hz）；没有限帧与帧率统计输出，落点见 §13.2 |
 | 物理 / loader / ECS / render.resources | 只有占位头文件 |
 | 已知待修 | `main.cpp` 的 httpbin 自检会阻塞启动约 1 秒，可按需删除 |
 | 跨平台 | 平台层目前只有 `win32/`；`NativeWindowHandle` 与 `IRenderDevice` 已经是平台中立的，加 `platform/x11` 是实现问题 |

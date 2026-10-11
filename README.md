@@ -105,7 +105,7 @@ stv3d-lab/
 │   ├─ core_math_test.cpp      core 数学单测（67 项，纯 g++，无窗口无 GPU）
 │   ├─ core_log_test.cpp       日志单测（26 项，含 4 线程并发写）
 │   ├─ core_geometry_test.cpp  几何生成单测（17 项：索引范围/绕序/尺寸/法线）
-│   └─ engine_test.cpp         engine 单测：摄像机/模型/角色/主循环/输入映射（117 项）
+│   └─ engine_test.cpp         engine 单测：摄像机/模型/角色/主循环/输入映射（114 项）
 ├─ .vscode/                    tasks.json（CMake 构建）/ launch.json（gdb）/ c_cpp_properties.json
 ├─ .gitignore                  build/、*.exe、*.dll、*.log 等
 └─ README.md                   本文件
@@ -375,7 +375,7 @@ RHI 的 Direct3D 11 实现，也是三个后端里最"短"的一个（D3D11 本�
 
 ### `GameLoop` / `TaskScheduler`（src/game/GameLoop.h/.cpp → `stv3d_engine`）
 - `init()/start()/pause()/exit()`、`isActive()`、`getState()`（位标志 `GameLoopFlags`）、`getTickCount()`
-- 固定步长：`getFixedTickSeconds()`（默认 1/60）、`setFixedTickSeconds()`；帧间隔 `setFrameInterval(ms)` / `getFrameInterval()`（默认 16）
+- 固定步长：`getFixedTickSeconds()`（默认 1/60）、`setFixedTickSeconds()`（只接受 > 0）
 - **回调替代了原来的 Qt 信号**：`setTickCallback(cb(tickCount))`、`setFrameCallback(cb(dt))`
 - **循环自己不持有时钟/事件循环**：由平台层每个泵循环调一次 `advance()`；
   `advanceBy(elapsedSeconds)` 是确定性的内核（`advance()` 只负责从 `steady_clock` 采一个数给它），
@@ -505,7 +505,7 @@ ctest --test-dir build            # 或直接跑 build\stv3d_*_tests.exe
 | 套件 | 覆盖 | 检查项 |
 |---|---|---|
 | `tests/core_math_test.cpp` | 列主序布局与 `at/column/translation`、乘法与结合、`fromTRS` 的 S→R→T、`lookAt`（含视线与 up 平行退化）、透视投影 **GL[-1,1] 与 Vulkan[0,1]+flipY 两套**、`ortho` 两套、四元数（轴角/复合顺序/共轭/归一化/fromTo/slerp/`fromMat3`↔`toMat3` 一致性）、mat3 逆与行列式、mat4 行列式与逆（含奇异→单位阵） | 67 |
-| `tests/engine_test.cpp` | 摄像机（默认机位、viewMatrix 映射、lookAt、世界/局部旋转、俯仰限位、500 次随机旋转后仍无滚转且正交、moveLocal、**GL/Vulkan 两套投影 + flipY**、fov/aspect 钳制）、模型（S→R→T、`fromTRS` 等价、四元数累积、自转积分、负 dt 不推进）、角色控制器（方向/归一化/疾跑/俯视不出水平面）、角色（TPV 摆放与注视、FPV 眼睛高度与朝向不被覆盖、切模式、轨道限位 ±89°、距离钳制 0.5/100）、**GameLoop**（固定步长整除、累加器余数、10 秒卡顿只补 5 刻且丢弃积压、pause 停逻辑刻但帧照跑、start 恢复、`enqueue` 只跑一次、三种 scheduler 任务、零/负 dt 不推进、非法参数回退）、**InputMapping**（空帧无意图、W/↑ 都是前进、SAD+方向键、Space/E 跳跃意图、Shift 疾跑、F5/R/Esc 都是 edge 不粘滞、关闭按钮也算退出、`clearPerFrame` 清每帧量但保留按键与光标） | 117 |
+| `tests/engine_test.cpp` | 摄像机（默认机位、viewMatrix 映射、lookAt、世界/局部旋转、俯仰限位、500 次随机旋转后仍无滚转且正交、moveLocal、**GL/Vulkan 两套投影 + flipY**、fov/aspect 钳制）、模型（S→R→T、`fromTRS` 等价、四元数累积、自转积分、负 dt 不推进）、角色控制器（方向/归一化/疾跑/俯视不出水平面）、角色（TPV 摆放与注视、FPV 眼睛高度与朝向不被覆盖、切模式、轨道限位 ±89°、距离钳制 0.5/100）、**GameLoop**（固定步长整除、累加器余数、10 秒卡顿只补 5 刻且丢弃积压、pause 停逻辑刻但帧照跑、start 恢复、`enqueue` 只跑一次、三种 scheduler 任务、零/负 dt 不推进、非法参数回退）、**InputMapping**（空帧无意图、W/↑ 都是前进、SAD+方向键、Space/E 跳跃意图、Shift 疾跑、F5/R/Esc 都是 edge 不粘滞、关闭按钮也算退出、`clearPerFrame` 清每帧量但保留按键与光标） | 114 |
 | `tests/core_log_test.cpp` | 行格式（`时间戳 [级别] 内容`、逐位校验时间戳）、四个级别的标签、流式拼接（int/`std::string`/bool）、`logFixed`/`logHex` 的精度与状态还原、**4 线程 × 50 行不丢行不串行**、init/shutdown/再 init 的幂等与追加语义、init 之前写 stderr 不丢消息 | 26 |
 | `tests/core_geometry_test.cpp` | 顶点格式尺寸（44 字节，即 pipeline 被告知的 stride）、`MeshData` 的 `empty`/`triangleCount`/`clear`、立方体的顶点/索引数、**索引全在范围内**、**无退化三角形**、**12 个面全部朝外（绕序一致）**、尺寸只改位置不改颜色、法线单位长度且朝外 | 17 |
 
@@ -533,6 +533,7 @@ ctest --test-dir build            # 或直接跑 build\stv3d_*_tests.exe
 | 后端细节对齐 | 给 Vulkan/D3D11 补 MSAA、剔除模式、混合、多渲染目标；`PipelineDesc` 已经是加这些的地方 |
 | 资源管理 | 纹理/采样器（`IRenderDevice` 加 `createTexture`）、设备内存分配（Vulkan 用 VMA，D3D11 用 staging 上传） |
 | 场景层 | 按 pipeline/材质分组的渲染队列（目前 Sandbox 每帧线性遍历模型） |
+| 限帧 | 现在帧率由 vsync 决定（真正的渲染耗时由显卡与刷新率定）；要限帧就在 `main.cpp` 的循环里，帧回调之后判断"本帧是否早于目标间隔"，早到就等剩下的时间。`Sleep(1)` 的实际粒度约 15.6 ms（默认系统时钟），因此需要 `timeBeginPeriod(1)` 或可等待定时器；开着 vsync 时上限本来就被刷新率压住，限帧只在关掉 vsync 或追求稳定步进时才有意义 |
 | 工具 | `--api` 之外再加 `--shader-dir`、`--frames N`（跑固定帧数后退出，便于 CI 做画面回归） |
 
 **其他已知边界**

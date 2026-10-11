@@ -2,8 +2,6 @@
 
 namespace
 {
-constexpr int kDefaultFrameIntervalMs = 16;  // default frame interval 16ms ~ 60fps
-
 // A frame may catch up on several logic ticks, but the catch-up count is capped so that a slow
 // frame cannot trigger an ever-growing backlog (the classic "death spiral")
 constexpr int kMaxSubSteps = 5;
@@ -86,11 +84,6 @@ void GameLoop::exit()
     task_queue.clear();
     scheduler.clear();
     loop_state = 0;
-}
-
-void GameLoop::setFrameInterval(int milliseconds)
-{
-    frame_interval_ms = milliseconds > 0 ? milliseconds : kDefaultFrameIntervalMs;
 }
 
 void GameLoop::setFixedTickSeconds(double seconds)

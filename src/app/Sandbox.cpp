@@ -188,8 +188,7 @@ bool Sandbox::createResources(IRenderDevice &device, const std::string &assetDir
 
     game_loop.init();
     game_loop.start();
-    LOG_INFO() << "game loop started: fixed tick = " << game_loop.getFixedTickSeconds()
-               << " s, frame interval = " << game_loop.getFrameInterval() << " ms";
+    LOG_INFO() << "game loop started: fixed tick = " << game_loop.getFixedTickSeconds() << " s";
     LOG_INFO() << "initial camera view: " << (camera_view == CameraView::FPV ? "FPV" : "TPV")
                << " (press F5 to switch view mode)";
     return true;

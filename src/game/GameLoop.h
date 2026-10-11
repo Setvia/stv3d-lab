@@ -83,11 +83,6 @@ public:
     void setTickCallback(TickCallback callback) { tick_callback = std::move(callback); }
     void setFrameCallback(FrameCallback callback) { frame_callback = std::move(callback); }
 
-    // Frame interval in milliseconds, default 16ms ~ 60fps.
-    // This is the interval the platform pump should run at; the loop itself never waits.
-    void setFrameInterval(int milliseconds);
-    int getFrameInterval() const { return frame_interval_ms; }
-
     // Fixed timestep of one logic tick (seconds), default 1/60. Physics/character/animation should
     // all step by this to stay frame-rate independent
     double getFixedTickSeconds() const { return fixed_tick_seconds; }
@@ -118,7 +113,6 @@ private:
     TaskScheduler scheduler;
     std::chrono::steady_clock::time_point last_time{};
 
-    int frame_interval_ms = 16;
     std::uint64_t tick_count = 0;
     double tick_accumulator = 0.0;
     double fixed_tick_seconds = 1.0 / 60.0;

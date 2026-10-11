@@ -354,7 +354,6 @@ int main()
 
         GameLoop loop;
         check(!loop.isActive(), "loop: not active before start");
-        check(loop.getFrameInterval() == 16, "loop: the default frame interval is 16 ms");
         check(near(static_cast<float>(loop.getFixedTickSeconds()), 1.0f / 60.0f),
               "loop: the default fixed tick is 1/60 s");
 
@@ -448,10 +447,6 @@ int main()
         loop.setFixedTickSeconds(0.5);
         check(near(static_cast<float>(loop.getFixedTickSeconds()), 0.5f),
               "loop: setFixedTickSeconds takes effect");
-        loop.setFrameInterval(0);
-        check(loop.getFrameInterval() == 16, "loop: an invalid frame interval falls back to 16 ms");
-        loop.setFrameInterval(33);
-        check(loop.getFrameInterval() == 33, "loop: setFrameInterval takes effect");
 
         // exit(): stops the loop, clears the queue and the scheduler
         loop.exit();
