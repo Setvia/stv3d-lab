@@ -55,10 +55,10 @@ void TaskScheduler::clear()
 void GameLoop::init()
 {
     loop_state |= GameLoopFlags::INITIALIZED;
-    loop_state |= GameLoopFlags::OVERLOAD;  // this project has no asynchronously loaded resources yet
     tick_count = 0;
     tick_accumulator = 0.0;
     last_time = std::chrono::steady_clock::now();
+    // The load queue is deliberately left alone: the whole load plan may be registered before init()
 }
 
 void GameLoop::start()
@@ -83,6 +83,7 @@ void GameLoop::exit()
 {
     task_queue.clear();
     scheduler.clear();
+    load_queue.clear();  // whatever was still queued would never run now
     loop_state = 0;
 }
 
@@ -149,7 +150,15 @@ void GameLoop::mainLoop(double elapsed_seconds)
         }
     }
 
-    // (3) per-frame step
+    // (3) streaming: one bounded slice of the load queue. It sits between the logic ticks and the frame
+    // step so an object that becomes ready is there for this turn's frame callback (and for the renderer
+    // right after it), and it stays outside beginFrame/endFrame, so an upload never lands in the middle
+    // of a command list. A paused loop keeps streaming; a loop that has not started does not.
+    if (streaming_items_per_turn > 0) {
+        load_queue.step(streaming_items_per_turn);
+    }
+
+    // (4) per-frame step
     const float dt = static_cast<float>(elapsed_seconds);
     scheduler.onFrame(dt);
     scheduler.onRealTime(elapsed_seconds);

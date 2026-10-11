@@ -1,6 +1,7 @@
 #ifndef APP_SANDBOX_H
 #define APP_SANDBOX_H
 
+#include "core/geometry/MeshData.h"
 #include "core/platform/FrameInput.h"
 #include "game/Camera.h"
 #include "game/Character.h"
@@ -8,6 +9,7 @@
 #include "game/Model.h"
 #include "render/rhi/RenderDevice.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -16,6 +18,11 @@
 //
 // It talks to IRenderDevice only - buffers, shaders, a pipeline and a command list - so the graphics
 // API behind the interface is not visible here, and the geometry it uploads comes from core (MeshGen).
+//
+// Scene assembly happens in two waves (see createResources):
+//   * the preload wave runs before the loop starts and holds whatever the first logic tick reads;
+//   * the streaming wave is queued before the loop starts but runs inside it, a bounded number of
+//     items per turn, so nothing waits for content that no tick depends on.
 class Sandbox
 {
 public:
@@ -25,7 +32,7 @@ public:
     Sandbox(const Sandbox &) = delete;
     Sandbox &operator=(const Sandbox &) = delete;
 
-    // Build the pipeline, the geometry and the constant buffer; requires a device with a swapchain.
+    // Build the pipeline, load the scene and start the loop; requires a device with a swapchain.
     // `assetDirectory` is where shaders/ lives (the app passes the executable directory).
     bool createResources(IRenderDevice &device, const std::string &assetDirectory);
 
@@ -63,6 +70,10 @@ private:
     void drawModel(IRenderDevice &device, ICommandList &commands, const mat4 &view_projection,
                    const Model &model, std::uint32_t block_index);
 
+    // Upload staged_meshes[slot] and remember it as meshes[slot]. Runs from a load queue apply step,
+    // i.e. on the main thread between frames - never inside beginFrame/endFrame.
+    bool uploadMesh(std::size_t slot);
+
     void resetCamera();
     void setCameraView(CameraView view);
 
@@ -72,7 +83,12 @@ private:
     ShaderHandle vertex_shader = kInvalidHandle;
     ShaderHandle fragment_shader = kInvalidHandle;
     BufferHandle uniform_buffer = kInvalidHandle;
-    std::vector<GpuMesh> meshes;
+    std::vector<GpuMesh> meshes;  // one per entry in staged_meshes, filled as the loads run
+
+    // CPU payloads waiting for (or already past) their upload: slot 0 is the environment geometry,
+    // the following slots are the streamed props. A load's produce() fills a slot and its apply()
+    // consumes it, which is the seam a worker thread would use later on.
+    std::vector<MeshData> staged_meshes;
 
     // Constant blocks: one per draw, and one set of them per frame in flight, laid out at
     // device.uniformBufferAlignment() boundaries. A single block would be overwritten while the GPU
@@ -83,7 +99,7 @@ private:
     std::uint32_t frame_index = 0;      // which set of blocks this frame uses
 
     // ---- scene state ----
-    std::vector<Model> models;  // each element is an independent spinning cube
+    std::vector<Model> models;  // the streamed props, appended as their loads complete
     Model character_model;      // placeholder model for the character
 
     Character character;  // the camera is attached to the character; FPV and TPV share it

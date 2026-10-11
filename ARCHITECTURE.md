@@ -151,7 +151,7 @@ flowchart LR
 `stv3d_core` / `stv3d_engine` 只带 `src/` 一个 include 目录，也不做任何 `find_package`，所以：
 
 - core/engine 里写 `#include <windows.h>` 或 `<GL/gl.h>` → **直接编译失败**
-- 全项目 15 个 TU 都能用裸 `g++ -std=c++17 -c <file> -Isrc` 单独编过（用不着 CMake 与 vcpkg；
+- 全项目 16 个 TU 都能用裸 `g++ -std=c++17 -c <file> -Isrc` 单独编过（用不着 CMake 与 vcpkg；
   Vulkan 那个需要 `-I<vcpkg>/installed/x64-mingw-dynamic/include`）
 - `src/core/core_smoke.cpp` 是守卫 TU，唯一作用就是"core 一旦被污染就编译不过"
 - `Win32Window.h` 只暴露普通整数（消息处理器 + 宽度 `static_assert`），`<windows.h>` 留在平台层的 .cpp 里，
@@ -177,14 +177,15 @@ flowchart LR
 | `src/game/Camera.h` | engine | 位置 + 单位四元数 + 投影参数 | 见 §9.1 |
 | `src/game/Model.h` | engine | 变换 + 自转 + `MeshId` 引用几何 | 见 §9.2 |
 | `src/game/Character.{h,cpp}` | engine | 角色与控制器、FPV/TPV 摆位、轨道 | 见 §9.3 |
-| `src/game/GameLoop.{h,cpp}` | engine | 固定步长逻辑刻 + 每帧 + 待办队列 | 见 §9.4 |
+| `src/game/GameLoop.{h,cpp}` | engine | 固定步长逻辑刻 + 流式加载切片 + 每帧 + 待办队列 | 见 §9.4 |
+| `src/game/LoadQueue.{h,cpp}` | engine | 加载队列：预载/流式两类，produce + apply 两段，按预算推进 | 见 §9.6 |
 | `src/game/InputMapping.{h,cpp}` | engine | 按键 → 意图（纯函数，有单测） | `characterInputFromKeys/viewToggleRequested/resetRequested/quitRequested` |
 | `src/core/math/*.h` | core | 数学：列主序 mat3/mat4、quat、vec2/3/4、约定唯一出处 | `conventions.h` |
 | `src/core/geometry/*` | core | CPU 几何：`Vertex`（唯一顶点格式）、`MeshData`、`MeshGen::makeCube` | 见 §8.1 |
 | `src/core/platform/*` | core | 平台无关值类型 + 文件读取 | `Key`、`FrameInput`、`NativeWindowHandle`、`File` |
 | `src/core/log/*` | core | 日志（std-only） | `LogManager`、`LogStream`、`LOG_*` |
 | `src/*/{physics,loader,ecs,render/resources}` | — | 占位头文件，尚未实现 | — |
-| `tests/*.cpp` | 各测试目标 | 224 项检查（见 §12） | — |
+| `tests/*.cpp` | 各测试目标 | 277 项检查（见 §12） | — |
 | `shaders/basic.vert/.frag/.hlsl` | 资源 | 一份逻辑，三种方言 | — |
 
 ---
@@ -210,9 +211,11 @@ sequenceDiagram
     Note over D: GL 建 WGL 4.3 core 上下文 / VK 建 instance+device / D3D11 建 device
     M->>D: createSwapchain(SwapchainDesc{handle, w, h, vsync})
     M->>S: createResources(device, exeDir)
-    Note over S: 读 shader（按 device.shaderLanguage()）→ createShader ×2 → createPipeline<br/>MeshGen::makeCube → createBuffer(vertex/index/uniform)
+    Note over S: 读 shader（按 device.shaderLanguage()）→ createShader ×2 → createPipeline<br/>预载波：LoadQueue::request(Preload) → runPreload()：MeshGen::makeCube → createBuffer<br/>登记流式波：LoadQueue::request(Streaming) × N（此时只登记，不加载）<br/>恒定缓冲按"预载 + 流式计划 + 角色"一次配足 → init() → start()
     M->>S: resize(clientWidth, clientHeight)
     loop while (window.pumpMessages())
+        M->>S: getGameLoop().advance()
+        Note over S: 逻辑刻（≤5）→ load_queue.step(1)：产出一项 payload 并上传它的 buffer
         M->>D: beginFrame()
         M->>S: render(device)
         M->>D: endFrame()
@@ -233,7 +236,7 @@ while (window.pumpMessages()) {                       // 非阻塞收完整队�
         sandbox.resize(w, h);
     }
 
-    sandbox.getGameLoop().advance();                   // 时间在这里被消费（0..N 个逻辑刻）
+    sandbox.getGameLoop().advance();                   // 时间在这里被消费：0..N 个逻辑刻 + 流式加载切片
 
     device->beginFrame();                              // 取 back buffer
     sandbox.render(*device);                           // clear + bind + draw
@@ -256,8 +259,8 @@ stateDiagram-v2
     Armed --> Idle: exit()（清任务与状态位）
     Paused --> Idle: exit()
     note right of Armed
-        EVENT_ACTIVE | TIME_ACTIVE | INITIALIZED | OVERLOAD
-        每步：待办队列 → 累加器推进 N 个逻辑刻（≤5）→ 帧回调
+        EVENT_ACTIVE | TIME_ACTIVE | INITIALIZED（OVERLOAD 是算出来的：加载队列空闲）
+        每步：待办队列 → 累加器推进 N 个逻辑刻（≤5）→ 流式加载切片 → 帧回调
     end note
     note right of Paused
         逻辑刻停，帧回调照跑（还能渲染）
@@ -269,6 +272,8 @@ stateDiagram-v2
 | `fixed_tick_seconds` | `1/60` | 逻辑刻步长；`setFixedTickSeconds` 只接受 > 0 |
 | 每步最多补刻数 | `5` | 超过就丢弃积压（防死亡螺旋） |
 | `tick_accumulator` | — | 不足一刻的余量，`getTickAccumulator()` 给测试用 |
+| `streaming_items_per_turn` | `1` | 每转一圈最多推进几个流式加载项；`0` = 暂停流式但不暂停循环 |
+| `OVERLOAD` 位 | — | 不存储：由 `getLoadQueue().isIdle()` 现算（"没有待加载项"） |
 
 ---
 
@@ -291,10 +296,11 @@ flowchart TB
     M --> N["CharacterController::setInput(InputState)"]
     N --> O["Character::update(dt)<br/>位移 → syncCamera()（FPV 眼高 / TPV 轨道）"]
     O --> P["syncCharacterModel() + logCameraPositionIfMoved()"]
-    I --> Q["Sandbox::render(device)"]
+    I --> Q2["LoadQueue::step(streaming_items_per_turn)<br/>produce() 产出 payload → apply() 上传 buffer、把 Model 加入场景"]
+    Q2 --> Q["Sandbox::render(device)"]
     Q --> R["ICommandList::clear(0.1, 0.12, 0.15, 0.1, 1.0)"]
-    R --> S["bindPipeline / bindVertexBuffer / bindIndexBuffer"]
-    S --> T["逐模型：updateBuffer(常量块) → bindUniformBuffer(块偏移) → drawIndexed"]
+    R --> S["bindPipeline"]
+    S --> T["逐模型：bindVertexBuffer / bindIndexBuffer（各自持有几何）→ updateBuffer(常量块) → bindUniformBuffer(块偏移) → drawIndexed"]
     T --> U["device.endFrame()：提交 + present"]
 ```
 
@@ -630,12 +636,16 @@ classDiagram
         -GameLoopState loop_state
         -deque~Task~ task_queue
         -TaskScheduler scheduler
+        -LoadQueue load_queue
         -steady_clock::time_point last_time
         -uint64 tick_count
         -double tick_accumulator, fixed_tick_seconds = 1/60
+        -size_t streaming_items_per_turn = 1
         +init() / start() / pause() / exit()
         +getState() / isActive() / getTickCount()
         +getScheduler() TaskScheduler
+        +getLoadQueue() LoadQueue
+        +getStreamingItemsPerTurn() / setStreamingItemsPerTurn(n)
         +setTickCallback(cb) / setFrameCallback(cb)
         +getFixedTickSeconds() / setFixedTickSeconds(s)
         +getTickAccumulator() double
@@ -650,11 +660,30 @@ classDiagram
         +clear()
     }
 
+    class LoadQueue {
+        -vector~Item~ items
+        -size_t done_count, failed_count
+        +request(priority, produce, apply) LoadHandle
+        +cancel(handle) bool
+        +runPreload() bool
+        +step(maxItems) size_t
+        +isIdle() / pendingCount() / doneCount() / failedCount()
+        +clear()
+    }
+
+    class LoadPriority {
+        <<enumeration>>
+        Preload
+        Streaming
+    }
+
     Character *-- Camera
     Character *-- CharacterController
     CharacterController *-- InputState
     CharacterController *-- Speeds
     GameLoop *-- TaskScheduler
+    GameLoop *-- LoadQueue
+    LoadQueue ..> LoadPriority
     CharacterController ..> Camera : movementDirection / update
 ```
 
@@ -664,6 +693,8 @@ classDiagram
 |---|---|---|
 | 逻辑刻 | `1/60 s` | `GameLoop::fixed_tick_seconds` |
 | 补刻上限 | `5` | `GameLoop.cpp` `kMaxSubSteps` |
+| 流式加载预算 | `1 项/圈` | `GameLoop::streaming_items_per_turn`（`Sandbox` 用 `kStreamingItemsPerTurn` 设定） |
+| 流式道具数 | `3`（另有 1 个预载的环境几何槽） | `Sandbox.cpp` `kStreamedPropCount` |
 | 行走 / 疾跑 | `5 / 9 m/s` | `CharacterController::Speeds` |
 | FPV 眼高 | `1.6 m` | `Character::eye_height` |
 | TPV 注视高度 | `1.6 m` | `Character::camera_target_height` |
@@ -677,6 +708,28 @@ classDiagram
 | 机位日志阈值 | 位置 `0.5 m` 或 `dot(forward) < 0.999` | `Sandbox::log_move_threshold` |
 | 清屏色 | `(0.1, 0.12, 0.15, 0.1)`，深度 `1.0` | `Sandbox::render` |
 | 窗口 | `800 × 600` | `main.cpp` 的 `Win32Window::Config` |
+
+### 9.6 加载队列（`LoadQueue`）
+
+一次加载 = 一个优先级 + 两个函数。队列自己不带线程也不带时钟：什么时候干活由循环决定（`runPreload()` 由应用在启动前调用，`step()` 由循环每转一圈调用），所以它可测，而且所有设备调用都留在持有设备的那条线程上。
+
+| 方法 | 语义 |
+|---|---|
+| `request(priority, produce, apply)` | 入队并返回 handle（从 1 起，`kNoLoad` = 0 表示"没有"）；同一优先级内按请求顺序执行 |
+| `runPreload()` | 把 `Preload` 项一次跑完（阻塞），返回"是否全部成功"；某项失败不会中断其余项，日志里一次能看到所有坏资源 |
+| `step(maxItems)` | 最多跑 `maxItems` 个 `Streaming` 项，返回实际跑了几项 |
+| `cancel(handle)` | 只对还没开始的项有效；已经跑完/正在跑/已取消的返回 false |
+| `isIdle()` | 没有排队项、也没有正在跑的项 —— 这就是 `OVERLOAD` 位的来源 |
+| `clear()` | 丢弃全部（`GameLoop::exit()` 会调） |
+
+两段式是本设计的重点：它把"重活"与"碰设备"分开，也是将来把 `produce` 搬进工作线程时要动的唯一一条缝。
+
+| 阶段 | 允许做什么 | 现在跑在哪 |
+|---|---|---|
+| `produce()` | 只做 CPU 工作：读文件、解析、生成 `MeshData`。不碰设备 | 主线程（将来可整段搬到工作线程） |
+| `apply()` | 拿着 payload 做事：`createBuffer`、建 `Model`、挂进场景 | 主线程，在 `advance()` 里、`beginFrame()` 之外 |
+
+空函数 = 该阶段无事可做，算成功；任一段返回 false 就是该项失败，`produce` 失败时跳过 `apply`。一次加载的 `apply()` 只跑一次，跑完两个函数体即释放（它们捕获的 payload 也随之释放）。
 
 ---
 
@@ -759,31 +812,33 @@ flowchart LR
 
 ## 12. 测试与验证
 
-### 12.1 单测（`ctest` 4 套，共 224 项）
+### 12.1 单测（`ctest` 4 套，共 277 项）
 
 | 套件 | 链接 | 覆盖 | 检查项 |
 |---|---|---|---|
 | `tests/core_math_test.cpp` | 仅 `stv3d_core` | 列主序布局、`fromTRS` 的 S→R→T、`lookAt` 退化、透视两套裁剪空间、`ortho`、四元数、mat3/mat4 逆与行列式 | 67 |
 | `tests/core_log_test.cpp` | 仅 `stv3d_core` | 行格式与时间戳、级别标签、流式拼接、`logFixed/logHex`、**4 线程 × 50 行不丢不串**、init/shutdown 幂等与追加 | 26 |
 | `tests/core_geometry_test.cpp` | 仅 `stv3d_core` | 顶点 44 字节、`MeshData` 语义、立方体顶点/索引数、索引在范围内、无退化三角形、**12 面绕序一致朝外**、尺寸只改位置、法线单位且朝外 | 17 |
-| `tests/engine_test.cpp` | 仅 `stv3d_engine` | Camera（含 500 次随机旋转后无滚转且正交）、Model、Character/Controller、**GameLoop**（累加器余数、10 秒卡顿只补 5 刻、pause/start、enqueue、非法参数）、**InputMapping**（edge 不粘滞、clearPerFrame 语义） | 114 |
+| `tests/engine_test.cpp` | 仅 `stv3d_engine` | Camera（含 500 次随机旋转后无滚转且正交）、Model、Character/Controller、**GameLoop**（累加器余数、10 秒卡顿只补 5 刻、pause/start、enqueue、非法参数、流式切片与 `OVERLOAD` 位）、**LoadQueue**（预载/流式两类互不干扰、预算 0/N、请求顺序、produce 失败跳过 apply、失败计数、取消、`clear`、运行中的项不算 pending）、**InputMapping**（edge 不粘滞、clearPerFrame 语义） | 167 |
 
 ### 12.2 后端画面回归（单测覆盖不到的部分）
 
-方法：启动 → 窗口置顶（DPI-aware + `ClientToScreen`）→ 抓客户区 → 按列统计 clear 色之外的像素分组。
+方法：启动 → 窗口置顶（DPI-aware + `ClientToScreen`）→ 抓客户区 → 按列统计 clear 色之外的像素分组（左右各留 12 px 不参与统计，避开窗口边框）。"两帧变化"按每 2 px 采一格比较。
 
-| 后端 | 客户区 | clear 色 | 左立方体 | 中 | 右立方体 | 两帧变化 | 日志错误 | 退出码 |
-|---|---|---|---|---|---|---|---|---|
-| `--api gl`（Intel UHD 630, 4×MSAA, GLSL） | 800×600 | (25,31,38) | 0.242–0.330 | 0.478–0.522 | 0.655–0.778 | 2481 | 0 | 0 |
-| `--api vk`（GTX 1050 Ti, 1 sample, SPIR-V） | 800×600 | (25,31,38) | 0.255–0.325 | 0.478–0.522 | 0.658–0.772 | 2435 | 0 | 0 |
-| `--api d3d11`（Intel UHD 630, 1 sample, HLSL） | 800×600 | (25,31,38) | 0.245–0.330 | 0.478–0.522 | 0.652–0.785 | 2611 | 0 | 0 |
+| 后端 | 客户区 | clear 色 | 预载几何 | 左立方体 | 中 | 右立方体 | 两帧变化 | 日志错误 | 退出码 |
+|---|---|---|---|---|---|---|---|---|---|
+| `--api gl`（Intel UHD 630, 4×MSAA, GLSL） | 800×600 | (25,31,38) | 1 mesh | 0.251–0.320 | 0.476–0.523 | 0.653–0.786 | 2290 | 0 | 0 |
+| `--api vk`（GTX 1050 Ti, 1 sample, SPIR-V） | 800×600 | (25,31,38) | 1 mesh | 0.244–0.329 | 0.476–0.523 | 0.656–0.778 | 2364 | 0 | 0 |
+| `--api d3d11`（Intel UHD 630, 1 sample, HLSL） | 800×600 | (25,31,38) | 1 mesh | 0.253–0.319 | 0.476–0.523 | 0.653–0.785 | 2247 | 0 | 0 |
 
-"两帧变化"同时证明固定步长逻辑刻在跑（模型自转只可能来自 tick）。
+- "两帧变化"同时证明固定步长逻辑刻在跑（模型自转只可能来自 tick）。
+- 左右两个立方体自己在转，投影跨度随旋转相位在几十毫秒里变化，所以它们的列区间每次抓图都有 ±0.01 的浮动；中间那个是不转的参照点。
+- **三个道具是在循环启动之后才上传 buffer 的**：日志里 `stream: prop 1/3 ready at tick 5 … pending 0`，而上面这张表是流式跑完之后的稳态画面 —— 它同时证明了"启动后创建 GPU 缓冲并立刻参与绘制"在三个后端都成立（GL 的 `glGenBuffers`、Vulkan 的 device memory 分配+映射、D3D11 的 `CreateBuffer` 都发生在 `advance()` 里、`beginFrame()` 之外）。
 
 ### 12.3 解耦证明（裸编译器）
 
-15 个 TU 用 `g++ -std=c++17 -c <file> -Isrc` 单独编过：
-`core_smoke` `LogManager` `File` `MeshGen` `Character` `GameLoop` `InputMapping`
+16 个 TU 用 `g++ -std=c++17 -c <file> -Isrc` 单独编过：
+`core_smoke` `LogManager` `File` `MeshGen` `Character` `GameLoop` `LoadQueue` `InputMapping`
 `GLFunctions` `GLContext` `GLRenderDevice` `VulkanRenderDevice` `D3D11RenderDevice`
 `Sandbox` `Win32Window` `Win32Module`（Vulkan 那个需要 `-I<vcpkg>/.../include`）。
 
@@ -810,6 +865,10 @@ flowchart LR
 | 多 pass / 离屏 | `IRenderDevice` 加 render target 概念（GL FBO / VK framebuffer / D3D11 RTV 组合） |
 | 多线程录制 | `getCommandList()` 改为 `createCommandList()` 池化（Vulkan/D3D12 才真正受益） |
 | 场景/渲染队列 | 现在 `Sandbox::render` 线性遍历模型；按 pipeline/材质分组即可升级为队列 |
+| 加载放到工作线程 | `LoadQueue` 的两段式就是为此切的：把 `produce()` 连同 payload 搬到线程里，`apply()` 留在主线程（设备是单线程的），队列本身不用改；要加的是"payload 交给主线程"的交接与背压 |
+| 加载优先级细分 | 现在只有 `Preload`（启动前跑完）与 `Streaming`（按预算跑）两类，同类内按请求顺序；要按距离/可见性排序就在 `LoadPriority` 上加档，并在 `step()` 的选取里比较它 |
+| 对象在加载完成前消失 | `LoadQueue::cancel(handle)` 已经能丢弃排队项（`request` 返回 handle，`cancel` 返回是否真的取消了），应用侧要做的只是持有 handle 并在 despawn 时调用 |
+| 加载进度 UI | `pendingCount()/doneCount()/failedCount()` 就是现成的分子分母；`OVERLOAD` 位可直接驱动"载入中"提示 |
 | 限帧（目标帧率） | 帧率现在由 vsync 决定（`swapchain_desc.vsync` → GL `wglSwapIntervalEXT` / VK `FIFO` / D3D11 `Present(1)`）。限帧属于**循环**而不属于引擎层：在 `main.cpp` 的 `while (window.pumpMessages())` 里，`advance()` 之后按 `steady_clock` 判断本帧是否早于目标间隔，早到就等到目标时刻。等待用 `Sleep(1)` 时注意默认系统时钟粒度约 15.6 ms，需要 `timeBeginPeriod(1)` 或 `CreateWaitableTimerEx`；如果 `vsync` 为 true，限帧只会把帧率往下压，值为刷新率的整除数才平滑 |
 | 资源自动 barrier | 引入 RenderGraph（RHI 之上的一层），不在 RHI 内做 |
 
@@ -824,6 +883,8 @@ flowchart LR
 | D3D11 | 无 MSAA；每个常量块一个专用缓冲（见 §7.4）；RTV/DSV 在交换链创建时建一次；若将来出现黑屏或撕裂，第一处该查的就是 flip 模型下 back buffer 的重取时机 |
 | OpenGL | 4×MSAA；core profile（禁一切 legacy） |
 | 引擎 | 角色只有水平移动（无重力/跳跃/碰撞）；`GameLoop::pause/exit` 已测但应用未接（可绑暂停键） |
+| 流式加载 | 在主线程按预算推进（没有工作线程，也没有异步 I/O）：一个项的 `produce + apply` 仍占本圈的预算，只是被限制成每圈一项。真正的后台加载要按 §13.2 的那条走 |
+| 加载队列失败处理 | `runPreload()` 的失败会让启动中止；流式项失败只记一条错误并计数（`failedCount()`），场景少一个对象继续跑 |
 | 帧率 | 渲染帧率由 vsync 决定（逻辑刻恒为 60 Hz）；没有限帧与帧率统计输出，落点见 §13.2 |
 | 物理 / loader / ECS / render.resources | 只有占位头文件 |
 | 已知待修 | `main.cpp` 的 httpbin 自检会阻塞启动约 1 秒，可按需删除 |
@@ -835,6 +896,7 @@ flowchart LR
 
 - 改了 **RHI 接口** → 更新 §6、§7.1、§8.3
 - 改了 **引擎类型/常量** → 更新 §9
+- 改了 **加载队列** → 更新 §9.6、§4.3（每步顺序）、§12.1（检查项数）
 - 加了 **后端或着色器方言** → 更新 §7、§11、§12.2
 - 改了 **构建目标** → 更新 §2.1、§2.2
 - 这份图里的数值都来自真实代码；发现不一致时以代码为准，并回来修这里

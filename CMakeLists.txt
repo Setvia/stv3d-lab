@@ -64,6 +64,8 @@ add_library(stv3d_engine STATIC
     src/game/GameLoop.h
     src/game/InputMapping.cpp
     src/game/InputMapping.h
+    src/game/LoadQueue.cpp
+    src/game/LoadQueue.h
 )
 target_link_libraries(stv3d_engine PUBLIC stv3d_core)
 

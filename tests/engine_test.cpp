@@ -8,6 +8,7 @@
 #include "game/Character.h"
 #include "game/GameLoop.h"
 #include "game/InputMapping.h"
+#include "game/LoadQueue.h"
 #include "game/Model.h"
 
 #include "core/math/mat4.h"
@@ -15,9 +16,11 @@
 #include "core/math/vec3.h"
 
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <vector>
 
 namespace
 {
@@ -454,6 +457,163 @@ int main()
         const int frames_before_exit_step = frames;
         loop.advanceBy(tick);
         check(frames == frames_before_exit_step, "loop: an exited loop runs nothing");
+    }
+
+    // ============================= load queue ==============================
+    // The queue owns no thread and no timer: the loop decides when work runs, so a test can drive it
+    // step by step and assert the exact order things happen in.
+    {
+        LoadQueue queue;
+        check(queue.isIdle(), "loads: a fresh queue is idle");
+        check(queue.pendingCount() == 0, "loads: a fresh queue has nothing pending");
+
+        int produced = 0;
+        int applied = 0;
+        std::vector<int> order;
+
+        const LoadHandle first = queue.request(LoadPriority::Streaming,
+                                               [&] { ++produced; return true; },
+                                               [&] { ++applied; order.push_back(1); return true; });
+        check(first != kNoLoad, "loads: request hands out a handle");
+        check(!queue.isIdle(), "loads: a queued item makes the queue busy");
+        check(queue.pendingCount() == 1, "loads: a queued item counts as pending");
+
+        check(queue.runPreload(), "loads: runPreload succeeds when there is nothing to preload");
+        check(produced == 0 && applied == 0, "loads: runPreload leaves streaming items alone");
+
+        check(queue.step(0) == 0, "loads: a zero budget runs nothing");
+        check(queue.step(1) == 1, "loads: a budget of one runs one item");
+        check(produced == 1 && applied == 1, "loads: a step runs both phases of an item");
+        check(queue.isIdle() && queue.doneCount() == 1, "loads: the item is done and the queue idles again");
+        check(queue.step(1) == 0, "loads: a finished item does not run a second time");
+        check(!queue.cancel(first), "loads: a finished item cannot be cancelled");
+
+        // Request order is completion order, and an empty phase counts as success
+        queue.request(LoadPriority::Streaming, nullptr, [&] { order.push_back(2); return true; });
+        queue.request(LoadPriority::Streaming, [&] { ++produced; return true; }, [&] { order.push_back(3); return true; });
+        check(queue.pendingCount() == 2, "loads: two more requests are pending");
+
+        check(queue.step(2) == 2, "loads: a budget of two runs two items");
+        check(order.size() == 3 && order[1] == 2 && order[2] == 3, "loads: items run in request order");
+        check(queue.doneCount() == 3 && queue.failedCount() == 0, "loads: successes are counted separately");
+
+        // A failed produce skips the apply phase; a failed apply fails the item
+        int skipped_apply = 0;
+        queue.request(LoadPriority::Streaming, [] { return false; }, [&] { ++skipped_apply; return true; });
+        queue.request(LoadPriority::Streaming, nullptr, [] { return false; });
+        queue.step(2);
+        check(skipped_apply == 0, "loads: a failed produce skips the apply phase");
+        check(queue.failedCount() == 2, "loads: both failure kinds are counted as failures");
+        check(queue.isIdle(), "loads: failed items do not stay pending");
+
+        // A running item is not "pending": this is what a progress line reads from inside a phase
+        LoadQueue running_queue;
+        std::size_t pending_inside = 999;
+        bool idle_inside = true;
+        running_queue.request(LoadPriority::Streaming, nullptr, [&] {
+            pending_inside = running_queue.pendingCount();
+            idle_inside = running_queue.isIdle();
+            return true;
+        });
+        check(running_queue.step(1) == 1, "loads: the running item is executed");
+        check(pending_inside == 0, "loads: the item being run is not counted as pending");
+        check(!idle_inside, "loads: the queue is not idle while an item runs");
+
+        // Preload: run to completion on demand, in request order, and only that class
+        LoadQueue preload_queue;
+        int preload_done = 0;
+        preload_queue.request(LoadPriority::Preload, [&] { ++preload_done; return true; }, nullptr);
+        preload_queue.request(LoadPriority::Streaming, [&] { ++preload_done; return true; }, nullptr);
+        preload_queue.request(LoadPriority::Preload, nullptr, [&] { ++preload_done; return true; });
+        check(preload_queue.runPreload(), "loads: runPreload reports success");
+        check(preload_done == 2, "loads: runPreload runs the preload items and only those");
+        check(preload_queue.pendingCount() == 1, "loads: streaming items wait through runPreload");
+        check(preload_queue.doneCount() == 2, "loads: preload items count as done");
+        check(preload_queue.step(4) == 1, "loads: a step runs the streaming item that is left");
+
+        // One broken asset does not hide the others, but the caller still learns that something failed
+        LoadQueue failing_preload;
+        int second_preload_ran = 0;
+        failing_preload.request(LoadPriority::Preload, [] { return false; }, nullptr);
+        failing_preload.request(LoadPriority::Preload, nullptr, [&] { ++second_preload_ran; return true; });
+        check(!failing_preload.runPreload(), "loads: runPreload reports a failure");
+        check(second_preload_ran == 1, "loads: one failed item does not stop the remaining ones");
+
+        // cancel(): a queued item is abandoned before either phase runs
+        LoadQueue cancel_queue;
+        int cancelled_produced = 0;
+        const LoadHandle doomed = cancel_queue.request(LoadPriority::Streaming,
+                                                       [&] { ++cancelled_produced; return true; }, nullptr);
+        check(cancel_queue.cancel(doomed), "loads: a queued item can be cancelled");
+        check(cancel_queue.isIdle(), "loads: a cancelled item stops being pending");
+        check(cancel_queue.step(4) == 0, "loads: a cancelled item never runs");
+        check(cancelled_produced == 0, "loads: cancelling skips the produce phase as well");
+        check(!cancel_queue.cancel(doomed), "loads: cancelling twice reports nothing to cancel");
+        check(!cancel_queue.cancel(kNoLoad), "loads: an invalid handle cannot be cancelled");
+        check(cancel_queue.doneCount() == 0 && cancel_queue.failedCount() == 0,
+              "loads: a cancelled item is neither done nor failed");
+
+        LoadQueue clear_queue;
+        clear_queue.request(LoadPriority::Streaming, nullptr, nullptr);
+        clear_queue.request(LoadPriority::Preload, nullptr, nullptr);
+        clear_queue.clear();
+        check(clear_queue.isIdle() && clear_queue.pendingCount() == 0, "loads: clear() drops every item");
+        check(clear_queue.doneCount() == 0 && clear_queue.failedCount() == 0,
+              "loads: clear() resets the counters");
+    }
+
+    // ====================== streaming inside the loop ======================
+    // The plan may be registered before init()/start(); nothing runs until the loop actually turns.
+    {
+        const double tick = 1.0 / 60.0;
+
+        GameLoop loop;
+        int streamed = 0;
+        for (int i = 0; i < 3; ++i) {
+            loop.getLoadQueue().request(LoadPriority::Streaming, [&] { ++streamed; return true; }, nullptr);
+        }
+
+        check(loop.getStreamingItemsPerTurn() == 1, "loop: one streaming item per turn by default");
+        check((loop.getState() & GameLoopFlags::OVERLOAD) == 0,
+              "loop: pending loads keep the resource-ready bit clear");
+
+        loop.init();
+        check(loop.getLoadQueue().pendingCount() == 3, "loop: init keeps loads that were registered before it");
+        loop.advanceBy(0.0);
+        check(streamed == 0, "loop: a loop that never started streams nothing");
+
+        loop.start();
+        loop.advanceBy(tick);
+        check(streamed == 1, "loop: a turn streams up to the budget");
+        check((loop.getState() & GameLoopFlags::OVERLOAD) == 0,
+              "loop: the resource-ready bit stays clear while work is left");
+
+        loop.setStreamingItemsPerTurn(2);
+        check(loop.getStreamingItemsPerTurn() == 2, "loop: the streaming budget is settable");
+        loop.advanceBy(tick);
+        check(streamed == 3, "loop: a larger budget finishes the rest in one turn");
+        check((loop.getState() & GameLoopFlags::OVERLOAD) != 0,
+              "loop: an idle queue sets the resource-ready bit");
+
+        // Loading is not part of the logic clock: a paused loop keeps streaming while ticks are frozen
+        loop.pause();
+        const std::uint64_t ticks_before = loop.getTickCount();
+        loop.getLoadQueue().request(LoadPriority::Streaming, [&] { ++streamed; return true; }, nullptr);
+        loop.advanceBy(tick);
+        check(streamed == 4, "loop: a paused loop keeps streaming");
+        check(loop.getTickCount() == ticks_before, "loop: streaming does not tick the logic clock");
+
+        // exit() drops what is left, and the loop then reports nothing pending
+        loop.getLoadQueue().request(LoadPriority::Streaming, nullptr, nullptr);
+        loop.exit();
+        check(loop.getLoadQueue().isIdle(), "loop: exit drops the pending loads");
+        check((loop.getState() & GameLoopFlags::OVERLOAD) != 0,
+              "loop: an exited loop reports nothing pending");
+
+        GameLoop idle_loop;
+        idle_loop.init();
+        check((idle_loop.getState() & GameLoopFlags::OVERLOAD) != 0,
+              "loop: an empty queue reads as resources ready");
     }
 
     // ============================ input mapping ============================

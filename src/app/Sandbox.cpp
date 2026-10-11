@@ -8,10 +8,31 @@
 #include <cstddef>
 #include <cstdint>
 
+namespace
+{
+
+// The demo's streamed set: props nothing per-tick computes against, so they may arrive while the loop
+// is already running. Each one is a separate queue item and each uploads its own buffers, which is the
+// part worth exercising - creating GPU resources after startup has to work on every backend.
+constexpr std::size_t kStreamedPropCount = 3;
+
+// How many streamed items one turn may finish. One per turn makes the arrival visible in the log and
+// keeps a turn's extra cost predictable; raise it for content that is small or needed sooner.
+constexpr std::size_t kStreamingItemsPerTurn = 1;
+
+// Slot 0 of the geometry staging area is the environment set: the geometry the first tick's scene is
+// built from (a terrain or a skybox would be further slots in the preload wave).
+constexpr std::size_t kEnvironmentMeshSlot = 0;
+
+}  // namespace
+
 Sandbox::Sandbox()
 {
     // Logic ticks are a callback now: the platform pump calls game_loop.advance(), which lands here
     game_loop.setTickCallback([this](std::uint64_t) { onTick(); });
+
+    // Streaming runs inside the loop: this many items per turn of the pump
+    game_loop.setStreamingItemsPerTurn(kStreamingItemsPerTurn);
 }
 
 Sandbox::~Sandbox()
@@ -113,55 +134,31 @@ bool Sandbox::createResources(IRenderDevice &device, const std::string &assetDir
         return false;
     }
 
-    // (3) Geometry: CPU-side MeshData from core, uploaded through the device
-    const MeshData cube = MeshGen::makeCube(1.0f);
+    // (3) Scene, first wave - preload. This is the geometry the scene is built from before the loop
+    // ever ticks: what a terrain, a skybox or any collision/lighting input would be part of, and the
+    // reason this wave is not allowed to arrive late. It goes through the same queue as the streamed
+    // content, in the blocking class, so a scene load has exactly one code path.
+    LoadQueue &loads = game_loop.getLoadQueue();
+    staged_meshes.assign(1 + kStreamedPropCount, MeshData{});
 
-    BufferDesc vertex_buffer_desc;
-    vertex_buffer_desc.size = static_cast<std::uint32_t>(cube.vertices.size() * sizeof(Vertex));
-    vertex_buffer_desc.usage = BufferUsage::Vertex;
-    vertex_buffer_desc.initial_data = cube.vertices.data();
+    loads.request(LoadPriority::Preload,
+                  [this] {
+                      staged_meshes[kEnvironmentMeshSlot] = MeshGen::makeCube(1.0f);
+                      return true;
+                  },
+                  [this] { return uploadMesh(kEnvironmentMeshSlot); });
 
-    BufferDesc index_buffer_desc;
-    index_buffer_desc.size = static_cast<std::uint32_t>(cube.indices.size() * sizeof(std::uint32_t));
-    index_buffer_desc.usage = BufferUsage::Index;
-    index_buffer_desc.initial_data = cube.indices.data();
-
-    GpuMesh mesh;
-    mesh.vertex_buffer = device.createBuffer(vertex_buffer_desc);
-    mesh.index_buffer = device.createBuffer(index_buffer_desc);
-    mesh.index_count = static_cast<std::uint32_t>(cube.indices.size());
-    mesh.index_format = IndexFormat::UInt32;
-    if (mesh.vertex_buffer == kInvalidHandle || mesh.index_buffer == kInvalidHandle) {
-        LOG_ERROR() << "geometry upload failed: " << device.lastError();
+    if (!loads.runPreload()) {
+        LOG_ERROR() << "environment geometry failed to load";
         return false;
     }
-    meshes.push_back(mesh);
-    const MeshId cube_mesh = 0;
 
-    // (4) Models: three spinning cubes plus the character placeholder, all sharing one geometry
-    struct ModelSpec
-    {
-        vec3 position;
-        float scale;
-        float spin_degrees_per_second;
-        vec3 spin_axis;
-    };
+    const MeshId environment_mesh = static_cast<MeshId>(kEnvironmentMeshSlot);
 
-    const ModelSpec specs[] = {
-        {vec3{-4.0f, 0.0f, -2.0f}, 1.0f, 30.0f, vec3{0.0f, 1.0f, 0.0f}},
-        {vec3{4.0f, 0.0f, -2.0f}, 1.4f, 60.0f, vec3{1.0f, 0.0f, 0.0f}},
-        {vec3{0.0f, 0.0f, -7.0f}, 0.7f, 90.0f, vec3{1.0f, 1.0f, 0.0f}},
-    };
-
-    for (const ModelSpec &spec : specs) {
-        Model model(cube_mesh);
-        model.setPosition(spec.position);
-        model.setUniformScale(spec.scale);
-        model.setSpin(spec.spin_degrees_per_second, spec.spin_axis);
-        models.push_back(model);
-    }
-
-    character_model = Model(cube_mesh);
+    // (4) The character's placeholder shares that geometry: the first logic tick already moves it, so
+    // it has to be resident before start(). It is the only model in the scene at this point - the props
+    // below are requested now but exist later.
+    character_model = Model(environment_mesh);
     character_model.setUniformScale(0.6f);
     character_model.setSpin(0.0f);  // the character does not spin
     syncCharacterModel();
@@ -169,7 +166,9 @@ bool Sandbox::createResources(IRenderDevice &device, const std::string &assetDir
     // (5) Constant buffer: one block per draw, times the number of frames the backend may run in
     // flight, each block aligned to what the device requires. All of them live in one buffer and are
     // selected with a range/dynamic offset at bind time - the portable way to feed per-draw constants.
-    max_draws = static_cast<std::uint32_t>(models.size() + 1);  // the models plus the character
+    // The draw count covers the whole plan, not just what exists yet: every streaming request is made
+    // below, before the loop starts, so the slab never has to grow while frames may still read it.
+    max_draws = static_cast<std::uint32_t>(models.size() + kStreamedPropCount + 1);  // now + plan + character
     const std::uint32_t alignment = device.uniformBufferAlignment() > 0 ? device.uniformBufferAlignment() : 16;
     uniform_stride = ((static_cast<std::uint32_t>(sizeof(mat4)) + alignment - 1) / alignment) * alignment;
 
@@ -183,12 +182,63 @@ bool Sandbox::createResources(IRenderDevice &device, const std::string &assetDir
         return false;
     }
 
-    LOG_INFO() << "scene: " << meshes.size() << " mesh(es), " << (models.size() + 1) << " model(s)"
-               << " | backend: " << device.backendName();
+    // (6) Scene, second wave - streaming. Props that no per-tick computation reads, so they may arrive
+    // after the loop is running: the queue hands out one item per turn (GameLoop streams it between the
+    // ticks and the frame), and each item produces its own payload and uploads its own buffers.
+    struct PropSpec
+    {
+        vec3 position;
+        float scale;
+        float spin_degrees_per_second;
+        vec3 spin_axis;
+    };
+
+    const PropSpec specs[] = {
+        {vec3{-4.0f, 0.0f, -2.0f}, 1.0f, 30.0f, vec3{0.0f, 1.0f, 0.0f}},
+        {vec3{4.0f, 0.0f, -2.0f}, 1.4f, 60.0f, vec3{1.0f, 0.0f, 0.0f}},
+        {vec3{0.0f, 0.0f, -7.0f}, 0.7f, 90.0f, vec3{1.0f, 1.0f, 0.0f}},
+    };
+
+    for (std::size_t i = 0; i < kStreamedPropCount; ++i) {
+        const PropSpec spec = specs[i];
+        const std::size_t slot = kEnvironmentMeshSlot + 1 + i;
+
+        loads.request(
+            LoadPriority::Streaming,
+            // produce: build the payload. A generated cube here; in an asset pipeline this is the file
+            // read and the parse - the part that would move to a worker thread, leaving apply() below
+            // where it is.
+            [this, slot] {
+                staged_meshes[slot] = MeshGen::makeCube(1.0f);
+                return true;
+            },
+            // apply: upload the payload and put the model into the scene, on the main thread
+            [this, slot, spec, i] {
+                if (!uploadMesh(slot)) {
+                    return false;
+                }
+
+                Model model(static_cast<MeshId>(slot));
+                model.setPosition(spec.position);
+                model.setUniformScale(spec.scale);
+                model.setSpin(spec.spin_degrees_per_second, spec.spin_axis);
+                models.push_back(model);
+
+                LOG_INFO() << "stream: prop " << (i + 1) << "/" << kStreamedPropCount
+                           << " ready at tick " << game_loop.getTickCount() << " | models " << models.size()
+                           << " | pending " << game_loop.getLoadQueue().pendingCount();
+                return true;
+            });
+    }
+
+    LOG_INFO() << "scene: " << meshes.size() << " mesh(es) resident, " << (models.size() + 1)
+               << " model(s) | " << kStreamedPropCount << " prop(s) streaming | backend: "
+               << device.backendName();
 
     game_loop.init();
     game_loop.start();
-    LOG_INFO() << "game loop started: fixed tick = " << game_loop.getFixedTickSeconds() << " s";
+    LOG_INFO() << "game loop started: fixed tick = " << game_loop.getFixedTickSeconds() << " s, streaming "
+               << game_loop.getStreamingItemsPerTurn() << " item(s) per turn";
     LOG_INFO() << "initial camera view: " << (camera_view == CameraView::FPV ? "FPV" : "TPV")
                << " (press F5 to switch view mode)";
     return true;
@@ -224,7 +274,46 @@ void Sandbox::releaseResources()
     }
 
     models.clear();
+    staged_meshes.clear();  // the payloads the loads produced are not needed once their buffers exist
     device = nullptr;
+}
+
+// Upload one staged payload. This is the only place that turns CPU geometry into GPU buffers, whether
+// it runs in the preload wave before the loop or in a streaming step inside it.
+bool Sandbox::uploadMesh(std::size_t slot)
+{
+    if (device == nullptr || slot >= staged_meshes.size()) {
+        return false;
+    }
+
+    const MeshData &cpu_mesh = staged_meshes[slot];
+
+    BufferDesc vertex_buffer_desc;
+    vertex_buffer_desc.size = static_cast<std::uint32_t>(cpu_mesh.vertices.size() * sizeof(Vertex));
+    vertex_buffer_desc.usage = BufferUsage::Vertex;
+    vertex_buffer_desc.initial_data = cpu_mesh.vertices.data();
+
+    BufferDesc index_buffer_desc;
+    index_buffer_desc.size = static_cast<std::uint32_t>(cpu_mesh.indices.size() * sizeof(std::uint32_t));
+    index_buffer_desc.usage = BufferUsage::Index;
+    index_buffer_desc.initial_data = cpu_mesh.indices.data();
+
+    GpuMesh gpu_mesh;
+    gpu_mesh.vertex_buffer = device->createBuffer(vertex_buffer_desc);
+    gpu_mesh.index_buffer = device->createBuffer(index_buffer_desc);
+    gpu_mesh.index_count = static_cast<std::uint32_t>(cpu_mesh.indices.size());
+    gpu_mesh.index_format = IndexFormat::UInt32;
+
+    if (gpu_mesh.vertex_buffer == kInvalidHandle || gpu_mesh.index_buffer == kInvalidHandle) {
+        LOG_ERROR() << "geometry upload failed: " << device->lastError();
+        return false;
+    }
+
+    if (meshes.size() <= slot) {
+        meshes.resize(slot + 1);
+    }
+    meshes[slot] = gpu_mesh;
+    return true;
 }
 
 // ---------------- per frame ----------------
@@ -280,6 +369,12 @@ void Sandbox::drawModel(IRenderDevice &device, ICommandList &commands, const mat
         return;
     }
 
+    // Geometry is bound per draw: streamed objects own the buffers they arrived with, so there is no
+    // single "current mesh" to bind once per frame.
+    const GpuMesh &mesh = meshes[model.getMesh()];
+    commands.bindVertexBuffer(mesh.vertex_buffer);
+    commands.bindIndexBuffer(mesh.index_buffer, mesh.index_format);
+
     // Write this draw's matrix into its own aligned block, then bind exactly that range. Nothing is
     // overwritten that a frame in flight could still be reading.
     const mat4 mvp = view_projection * model.modelMatrix();
@@ -287,7 +382,7 @@ void Sandbox::drawModel(IRenderDevice &device, ICommandList &commands, const mat
     device.updateBuffer(uniform_buffer, &mvp, static_cast<std::uint32_t>(sizeof(mat4)), offset);
     commands.bindUniformBuffer(uniform_buffer, 0, offset, static_cast<std::uint32_t>(sizeof(mat4)));
 
-    commands.drawIndexed(meshes[model.getMesh()].index_count);
+    commands.drawIndexed(mesh.index_count);
 }
 
 void Sandbox::render(IRenderDevice &device)
@@ -301,8 +396,6 @@ void Sandbox::render(IRenderDevice &device)
     }
 
     commands.bindPipeline(pipeline);
-    commands.bindVertexBuffer(meshes[0].vertex_buffer);
-    commands.bindIndexBuffer(meshes[0].index_buffer, meshes[0].index_format);
 
     const Camera &camera = character.getCamera();
     const mat4 view_projection = camera.projectionMatrix() * camera.viewMatrix();

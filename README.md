@@ -84,7 +84,8 @@ stv3d-lab/
 │   │   ├─ Camera.h            Camera：位置 + 四元数朝向 + 投影
 │   │   ├─ Model.h             Model：网格引用 + 变换 + 自转
 │   │   ├─ Character.h/.cpp    Character(Controller)：位置 + 控制器 + FPV/TPV
-│   │   ├─ GameLoop.h/.cpp     GameLoop：固定步长逻辑刻 + 每帧回调 + 任务调度
+│   │   ├─ GameLoop.h/.cpp     GameLoop：固定步长逻辑刻 + 流式加载切片 + 每帧回调 + 任务调度
+│   │   ├─ LoadQueue.h/.cpp    LoadQueue：加载队列（预载/流式、produce+apply、按预算推进）
 │   │   └─ InputMapping.h/.cpp 按键 → 意图（纯函数，可单测）
 │   ├─ platform/win32/         窗口层
 │   │   ├─ Win32Window.h/.cpp  窗口类 + WndProc + 消息泵 + 输入采集
@@ -105,7 +106,7 @@ stv3d-lab/
 │   ├─ core_math_test.cpp      core 数学单测（67 项，纯 g++，无窗口无 GPU）
 │   ├─ core_log_test.cpp       日志单测（26 项，含 4 线程并发写）
 │   ├─ core_geometry_test.cpp  几何生成单测（17 项：索引范围/绕序/尺寸/法线）
-│   └─ engine_test.cpp         engine 单测：摄像机/模型/角色/主循环/输入映射（114 项）
+│   └─ engine_test.cpp         engine 单测：摄像机/模型/角色/主循环/加载队列/输入映射（167 项）
 ├─ .vscode/                    tasks.json（CMake 构建）/ launch.json（gdb）/ c_cpp_properties.json
 ├─ .gitignore                  build/、*.exe、*.dll、*.log 等
 └─ README.md                   本文件
@@ -160,7 +161,7 @@ stv3d-lab (exe)  main.cpp：裸消息泵 + 游戏循环
   $vcpkgInc='D:\git\repos\vcpkg\installed\x64-mingw-dynamic\include'
   foreach ($f in 'src/core/core_smoke.cpp','src/core/log/LogManager.cpp','src/core/platform/File.cpp',
                  'src/core/geometry/generator/MeshGen.cpp','src/game/Character.cpp',
-                 'src/game/GameLoop.cpp','src/game/InputMapping.cpp','src/render/gl/GLFunctions.cpp',
+                 'src/game/GameLoop.cpp','src/game/LoadQueue.cpp','src/game/InputMapping.cpp','src/render/gl/GLFunctions.cpp',
                  'src/render/gl/GLContext.cpp','src/render/gl/GLRenderDevice.cpp',
                  'src/render/vk/VulkanRenderDevice.cpp','src/render/d3d11/D3D11RenderDevice.cpp',
                  'src/app/Sandbox.cpp',
@@ -168,9 +169,9 @@ stv3d-lab (exe)  main.cpp：裸消息泵 + 游戏循环
     & $g -std=c++17 -c $f -Isrc "-I$vcpkgInc" -o "$env:TEMP\proof.o"
   }
   ```
-  这 15 个文件全部通过 → 每一层都能脱离构建系统单独编译（`main.cpp` 另需 cpr 依赖；
+  这 16 个文件全部通过 → 每一层都能脱离构建系统单独编译（`main.cpp` 另需 cpr 依赖；
   Vulkan 后端需要 vcpkg 的 `vulkan/vulkan.h`，所以带上 `-I$vcpkgInc`；D3D11 用 MinGW 自带头，不需要额外路径）
-- 单测目标只链 core/engine → 在没有窗口和显卡的进程里就能跑，`ctest` 0.3 秒跑完三个套件
+- 单测目标只链 core/engine → 在没有窗口和显卡的进程里就能跑，`ctest` 0.2 秒跑完四个套件
 - 平台细节不外泄：`Win32Window.h` 的消息处理器用普通整数声明（`<windows.h>` 只出现在平台层的 .cpp 里）
   这样 `near`/`far`/`min`/`max` 这类宏不会泄漏进 engine 和 app
 
@@ -190,16 +191,26 @@ stv3d-lab (exe)  main.cpp：裸消息泵 + 游戏循环
 ### `Sandbox`（src/app/Sandbox.h/.cpp）
 场景层（原 `GLWidget` 去掉窗口与图形 API 后的部分）。持有 RHI 资源、模型列表、角色与主循环。
 
-- 生命周期：`createResources(device, exeDir)` 建片元/顶点着色器、pipeline、几何与常量缓冲 →
+- 生命周期：`createResources(device, exeDir)` 建着色器与 pipeline，然后**两波**装场景 →
   `resize(w,h)` 只改摄像机纵横比 → `handleInput(input)` → `render(device)` → `releaseResources()`
+- **场景分两波装**（这是 `createResources` 里最值得看的一段）：
+  - 第一波 **预载**（`LoadPriority::Preload` + `runPreload()`，在 `game_loop.start()` 之前跑完）：
+    第一个逻辑刻就要读的东西 —— 这里的共享立方体几何；地形、天空盒、碰撞体都属于这一波。
+    任一项失败 → `createResources` 直接返回 false，启动中止。
+  - 第二波 **流式**（`LoadPriority::Streaming`）：不依赖逐刻计算的东西（这里的三个道具，真项目里
+    就是 NPC、场景摆件）。请求在 `start()` 之前就登记好，但内容是循环跑起来之后每圈加载一项。
+  - 两波都走同一个 `LoadQueue`，而且**计划先于加载**：常量缓冲的 draw 槽位是按"预载 + 流式计划 +
+    角色"一次配足的，所以运行期不需要扩容（帧可能还在读那块缓冲）。
 - 人称：`enum class CameraView { FPV, TPV }`（定义在 src/game/Camera.h），内部 `setCameraView()`
 - 输入：移动意图在逻辑刻里由 `InputMapping::characterInputFromKeys()` 现算；
   `handleInput()` 处理切人称、复位、滚轮（TPV 拉距离 / FPV 变焦）与左键拖拽（FPV 转头 / TPV 轨道）
 - 几何：`MeshGen::makeCube` 产出 `MeshData`，经 `device.createBuffer` 变成一对 GPU buffer；
-  Sandbox 自己维护 `GpuMesh{ vertex_buffer, index_buffer, index_count, index_format }` 列表，
-  模型只记 `MeshId`
-- 绘制：`render()` 里 `clear` → `bindPipeline/bindVertexBuffer/bindIndexBuffer/bindUniformBuffer` →
-  逐模型 `updateBuffer(常量, VP × modelMatrix())` + `drawIndexed()`
+  上传只有一个入口 `uploadMesh(slot)`（预载与流式都走它），Sandbox 自己维护
+  `GpuMesh{ vertex_buffer, index_buffer, index_count, index_format }` 列表，模型只记 `MeshId`
+- 绘制：`render()` 里 `clear` → `bindPipeline` → 逐模型 `bindVertexBuffer/bindIndexBuffer`
+  （每个对象带自己的几何，所以几何是逐 draw 绑的）→ `updateBuffer(常量, VP × modelMatrix())` +
+  `bindUniformBuffer(块偏移)` + `drawIndexed()`
+- 日志：`stream: prop 2/3 ready at tick 6 | models 2 | pending 1` 一行一项，看到 `pending 0` 就是流式跑完了
 - 机位日志：位置移动 ≥0.5 m 或朝向变化时写一行 `camera[TPV]: eye(...) forward(...)`
 
 ### `Win32Window`（src/platform/win32/Win32Window.h/.cpp）
@@ -383,8 +394,36 @@ RHI 的 Direct3D 11 实现，也是三个后端里最"短"的一个（D3D11 本�
 - 累加器最多补 5 个逻辑刻，超过就丢弃积压（防"死亡螺旋"）；`enqueue(task)` 的待办在当前步开头执行
 - `pause()` 只停逻辑刻，帧与回调照跑；`start()` 兼作"恢复"并重置时钟（暂停期间的时间不会一次性涌进来）
 - 时间不活跃时（`pause()` 之后）只跑帧回调；未 `start()` 时除待办队列外什么都不跑
+- **每步的顺序是：待办队列 → 0..N 个逻辑刻 → 流式加载切片 → 帧回调**；加载切片在逻辑刻之后、
+  帧回调之前，所以这一圈刚加载好的对象这一圈就能画出来，而且它落在 `advance()` 里、`beginFrame()`
+  之外 —— 上传永远不会插进一个正在录制的 command list 中间
+- **`OVERLOAD` 位不存储，是按加载队列现算的**：`getState() & OVERLOAD` 为真 ⟺ `LoadQueue::isIdle()`
 - **不使用 `while` 阻塞循环**：事件泵必须持续运行，阻塞会让窗口失去响应
 - `mainLoop(elapsedSeconds)` 是私有单步推进，由 `advance()/advanceBy()` 调用
+
+### `LoadQueue`（src/game/LoadQueue.h/.cpp → `stv3d_engine`，**std only**）
+把"要加载什么"和"什么时候加载"分开的那个东西。它自己不持线程也不持时钟：`runPreload()` 由应用在
+启动前调一次，`step(n)` 由循环每转一圈调一次 —— 所以它可单测，而且所有设备调用都留在持有设备的
+那条线程上。
+
+| 接口 | 说明 |
+|---|---|
+| `request(priority, produce, apply)` | 入队，返回 `LoadHandle`（从 1 起，`kNoLoad` = 0）；同优先级内按请求顺序执行 |
+| `runPreload()` | 把 `Preload` 项一次跑完（阻塞），返回"是否全部成功"；某项失败不会中断其余项 |
+| `step(maxItems)` | 最多跑 `maxItems` 个 `Streaming` 项，返回实际跑了几项 |
+| `cancel(handle)` | 只对还没开始的项有效；跑完/正在跑/已取消的返回 false |
+| `isIdle()` / `pendingCount()` / `doneCount()` / `failedCount()` | 进度；`isIdle()` 就是 `OVERLOAD` 的来源 |
+| `clear()` | 丢弃全部（`GameLoop::exit()` 会调） |
+
+一次加载是两个函数，按顺序跑 —— 这条缝是留给未来的工作线程的：
+
+| 阶段 | 允许做什么 | 现在跑在哪 |
+|---|---|---|
+| `produce()` | 只做 CPU 工作：读文件、解析、生成 `MeshData`。**不碰设备** | 主线程（将来可整段搬到工作线程） |
+| `apply()` | 拿着 payload 做事：`createBuffer`、建 `Model`、挂进场景 | 主线程，在 `advance()` 里、`beginFrame()` 之外 |
+
+空函数 = 该阶段无事可做，算成功；任一段返回 `false` 就是该项失败，`produce` 失败时跳过 `apply`。
+两个函数体在跑完后即释放（它们捕获的 payload 也随之释放），所以一项只跑一次。
 
 ### `LogManager`（src/core/log/LogManager.h/.cpp → `stv3d_core`，**std only**）
 
@@ -435,10 +474,13 @@ RHI 的 Direct3D 11 实现，也是三个后端里最"短"的一个（D3D11 本�
  │                                                        → Character::update(fixedDt)
  │                                                        → 位移 + syncCamera()（按 FPV/TPV 摆放）
  │
+ ├─ 流式加载切片 LoadQueue::step(1) ──► produce() 产出 payload → apply() 上传 buffer、挂进场景
+ │                                      （每圈最多一项；跑完前都在 advance() 里、beginFrame() 之外）
+ │
  └─ 主循环里直接画：device.beginFrame() → sandbox.render(device) → device.endFrame()
                                                           ├─ ICommandList：clear / bindPipeline /
-                                                          │   bindVertexBuffer / bindIndexBuffer /
-                                                          │   bindUniformBuffer
+                                                          │   逐模型 bindVertexBuffer / bindIndexBuffer
+                                                          │   （每个对象带自己的几何）+ bindUniformBuffer
                                                           ├─ camera = character.getCamera()
                                                           ├─ VP = projectionMatrix() × viewMatrix()
                                                           └─ 对每个模型：
@@ -448,6 +490,7 @@ RHI 的 Direct3D 11 实现，也是三个后端里最"短"的一个（D3D11 本�
 
 > `GameLoop` 不持有时钟也不持有定时器：主循环每转一圈就调一次 `advance()`，逻辑刻与帧的节奏由累加器决定，
 > 平台层只负责"什么时候给它时间"。绘制在主循环里同步完成（vsync 由 `wglSwapIntervalEXT(1)` 限帧）。
+> 流式加载也挂在同一转上：每圈给队列一个预算，所以一圈的开销有上界，而一帧长什么样由逻辑刻和 vsync 决定。
 
 ## 7. 输入映射
 
@@ -505,7 +548,7 @@ ctest --test-dir build            # 或直接跑 build\stv3d_*_tests.exe
 | 套件 | 覆盖 | 检查项 |
 |---|---|---|
 | `tests/core_math_test.cpp` | 列主序布局与 `at/column/translation`、乘法与结合、`fromTRS` 的 S→R→T、`lookAt`（含视线与 up 平行退化）、透视投影 **GL[-1,1] 与 Vulkan[0,1]+flipY 两套**、`ortho` 两套、四元数（轴角/复合顺序/共轭/归一化/fromTo/slerp/`fromMat3`↔`toMat3` 一致性）、mat3 逆与行列式、mat4 行列式与逆（含奇异→单位阵） | 67 |
-| `tests/engine_test.cpp` | 摄像机（默认机位、viewMatrix 映射、lookAt、世界/局部旋转、俯仰限位、500 次随机旋转后仍无滚转且正交、moveLocal、**GL/Vulkan 两套投影 + flipY**、fov/aspect 钳制）、模型（S→R→T、`fromTRS` 等价、四元数累积、自转积分、负 dt 不推进）、角色控制器（方向/归一化/疾跑/俯视不出水平面）、角色（TPV 摆放与注视、FPV 眼睛高度与朝向不被覆盖、切模式、轨道限位 ±89°、距离钳制 0.5/100）、**GameLoop**（固定步长整除、累加器余数、10 秒卡顿只补 5 刻且丢弃积压、pause 停逻辑刻但帧照跑、start 恢复、`enqueue` 只跑一次、三种 scheduler 任务、零/负 dt 不推进、非法参数回退）、**InputMapping**（空帧无意图、W/↑ 都是前进、SAD+方向键、Space/E 跳跃意图、Shift 疾跑、F5/R/Esc 都是 edge 不粘滞、关闭按钮也算退出、`clearPerFrame` 清每帧量但保留按键与光标） | 114 |
+| `tests/engine_test.cpp` | 摄像机（默认机位、viewMatrix 映射、lookAt、世界/局部旋转、俯仰限位、500 次随机旋转后仍无滚转且正交、moveLocal、**GL/Vulkan 两套投影 + flipY**、fov/aspect 钳制）、模型（S→R→T、`fromTRS` 等价、四元数累积、自转积分、负 dt 不推进）、角色控制器（方向/归一化/疾跑/俯视不出水平面）、角色（TPV 摆放与注视、FPV 眼睛高度与朝向不被覆盖、切模式、轨道限位 ±89°、距离钳制 0.5/100）、**GameLoop**（固定步长整除、累加器余数、10 秒卡顿只补 5 刻且丢弃积压、pause 停逻辑刻但帧照跑、start 恢复、`enqueue` 只跑一次、三种 scheduler 任务、零/负 dt 不推进、非法参数回退）、**InputMapping**（空帧无意图、W/↑ 都是前进、SAD+方向键、Space/E 跳跃意图、Shift 疾跑、F5/R/Esc 都是 edge 不粘滞、关闭按钮也算退出、`clearPerFrame` 清每帧量但保留按键与光标）、**LoadQueue**（预载与流式互不干扰、预算 0/N、请求顺序即完成顺序、produce 失败跳过 apply、失败计数、取消只对排队项有效、`clear` 清计数、运行中的项不算 pending、`init()` 不丢启动前登记的请求、`OVERLOAD` 位随队列空闲翻转、`exit()` 丢弃排队项） | 167 |
 | `tests/core_log_test.cpp` | 行格式（`时间戳 [级别] 内容`、逐位校验时间戳）、四个级别的标签、流式拼接（int/`std::string`/bool）、`logFixed`/`logHex` 的精度与状态还原、**4 线程 × 50 行不丢行不串行**、init/shutdown/再 init 的幂等与追加语义、init 之前写 stderr 不丢消息 | 26 |
 | `tests/core_geometry_test.cpp` | 顶点格式尺寸（44 字节，即 pipeline 被告知的 stride）、`MeshData` 的 `empty`/`triangleCount`/`clear`、立方体的顶点/索引数、**索引全在范围内**、**无退化三角形**、**12 个面全部朝外（绕序一致）**、尺寸只改位置不改颜色、法线单位长度且朝外 | 17 |
 
@@ -517,12 +560,15 @@ ctest --test-dir build            # 或直接跑 build\stv3d_*_tests.exe
 
 | 后端 | 客户区 | clear 色 | 左立方体 | 中（立方体3+角色） | 右立方体 | 两帧变化 | 日志错误 | 退出码 |
 |---|---|---|---|---|---|---|---|---|
-| `--api gl`（Intel UHD 630, 4×MSAA, GLSL） | 800×600 | (25,31,38) | 0.242–0.330 | 0.478–0.522 | 0.655–0.778 | 2481 | 0 | 0 |
-| `--api vk`（GTX 1050 Ti, 1 sample, SPIR-V） | 800×600 | (25,31,38) | 0.255–0.325 | 0.478–0.522 | 0.658–0.772 | 2435 | 0 | 0 |
-| `--api d3d11`（Intel UHD 630, 1 sample, HLSL） | 800×600 | (25,31,38) | 0.245–0.330 | 0.478–0.522 | 0.652–0.785 | 2611 | 0 | 0 |
+| `--api gl`（Intel UHD 630, 4×MSAA, GLSL） | 800×600 | (25,31,38) | 0.251–0.320 | 0.476–0.523 | 0.653–0.786 | 2290 | 0 | 0 |
+| `--api vk`（GTX 1050 Ti, 1 sample, SPIR-V） | 800×600 | (25,31,38) | 0.244–0.329 | 0.476–0.523 | 0.656–0.778 | 2364 | 0 | 0 |
+| `--api d3d11`（Intel UHD 630, 1 sample, HLSL） | 800×600 | (25,31,38) | 0.253–0.319 | 0.476–0.523 | 0.653–0.785 | 2247 | 0 | 0 |
 
 差别来自 MSAA 与两块 GPU 的光栅化细节；位置一致、都在动、都无错误即视为通过。
-"两帧变化"是相隔 1.2 秒两次抓图的像素差——它同时证明了固定步长逻辑刻在跑（模型自转只可能来自 tick）。
+"两帧变化"是相隔 0.4 秒两次抓图的像素差（每 2 px 采一格）——它同时证明了固定步长逻辑刻在跑
+（模型自转只可能来自 tick）。左右两个立方体自己在转，投影跨度会随旋转相位浮动 ±0.01，中间那个不转，
+是稳定参照。这张表是**流式跑完之后的稳态**：三个道具的 buffer 是循环启动之后才创建的，
+所以它同时证明"运行期创建 GPU 缓冲并立刻参与绘制"在三个后端都成立。
 
 ## 11. 已知边界 / TODO
 
@@ -533,12 +579,19 @@ ctest --test-dir build            # 或直接跑 build\stv3d_*_tests.exe
 | 后端细节对齐 | 给 Vulkan/D3D11 补 MSAA、剔除模式、混合、多渲染目标；`PipelineDesc` 已经是加这些的地方 |
 | 资源管理 | 纹理/采样器（`IRenderDevice` 加 `createTexture`）、设备内存分配（Vulkan 用 VMA，D3D11 用 staging 上传） |
 | 场景层 | 按 pipeline/材质分组的渲染队列（目前 Sandbox 每帧线性遍历模型） |
+| 加载放到工作线程 | `LoadQueue` 的两段式就是为这一步切的：把 `produce()` 连 payload 搬进线程，`apply()` 留在主线程（设备是单线程的），队列本身不用改 |
+| 加载优先级细分 | 现在只有 `Preload` / `Streaming` 两类，同类内按请求顺序；要按距离或可见性排序就在 `LoadPriority` 上加档，并在 `step()` 的选取里比较它 |
+| 对象在加载完成前消失 | `request()` 返回的 handle 配合 `cancel(handle)` 就能丢弃排队项；应用侧持有 handle、在 despawn 时调用即可 |
 | 限帧 | 现在帧率由 vsync 决定（真正的渲染耗时由显卡与刷新率定）；要限帧就在 `main.cpp` 的循环里，帧回调之后判断"本帧是否早于目标间隔"，早到就等剩下的时间。`Sleep(1)` 的实际粒度约 15.6 ms（默认系统时钟），因此需要 `timeBeginPeriod(1)` 或可等待定时器；开着 vsync 时上限本来就被刷新率压住，限帧只在关掉 vsync 或追求稳定步进时才有意义 |
 | 工具 | `--api` 之外再加 `--shader-dir`、`--frames N`（跑固定帧数后退出，便于 CI 做画面回归） |
 
 **其他已知边界**
 
 - 角色只有**水平移动**：没有重力、跳跃、碰撞（`InputState.jump` 已接但控制器未实现）
+- **流式加载在主线程按预算推进**：没有工作线程，也没有异步 I/O，所以一项的 `produce + apply` 仍然占本圈的
+  预算 —— 只是被限制成每圈一项。真后台加载按上面「加载放到工作线程」那条走；`Sandbox` 里的三个道具
+  也都是同一个立方体几何，真正的资产管理（重复几何共享、引用计数、显存预算）还没做
+- 流式项失败只记一条错误并计数（队列的 `failedCount()`），场景少一个对象继续跑；`Preload` 项失败才会中止启动
 - `GameLoop` 的 `pause()` / `exit()` 与状态位已由单测覆盖，但应用还没接（可以绑到暂停键上）
 - `nlohmann-json` 已安装但未使用；目前**所有参数仍是代码内常量**，可统一抽成 `config.json`
 - 自由飞行的调试相机已移除（只剩 FPV / TPV）；如需"上帝视角"可加第三个 `CameraView`
