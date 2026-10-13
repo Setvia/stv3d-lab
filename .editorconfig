@@ -1,0 +1,28 @@
+# Editor conventions. .gitattributes is what Git enforces; this file is what makes an
+# editor produce the same thing in the first place, and it is the only place that states
+# the source encoding.
+#
+# VS Code only honours .editorconfig when the EditorConfig extension is installed, so
+# .vscode/settings.json carries the built-in equivalents of the rules below.
+#
+# The values are measured from the tree rather than aspirational: every indented line in
+# every source file uses spaces, four per level, and no file has trailing whitespace.
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+# Two trailing spaces are a hard line break in Markdown, so trimming can silently change
+# rendered output.
+[*.md]
+trim_trailing_whitespace = false
+
+# Make reads recipes by tab; a Makefile indented with spaces does not run.
+[{Makefile,makefile,*.mk}]
+indent_style = tab
