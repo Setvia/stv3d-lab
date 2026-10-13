@@ -316,14 +316,23 @@ struct mat4
             z_axis = vec3{0.0f, 0.0f, 1.0f};  // eye == target: keep a valid basis
         }
 
-        vec3 up_ref = up.normalized();
-        if (std::fabs(up_ref.dot(z_axis)) > 0.999f)
-        {
-            // View direction is (nearly) parallel to `up`: choose another reference axis
-            up_ref = (std::fabs(z_axis.y) > 0.9f) ? vec3{0.0f, 0.0f, 1.0f} : vec3{0.0f, 1.0f, 0.0f};
-        }
+        const vec3 up_ref = up.normalized();
 
-        const vec3 x_axis = up_ref.cross(z_axis).normalized();
+        // The cross product stays conditioned at any pitch: its length shrinks towards zero as
+        // the view approaches vertical, but the direction it normalises does not depend on the
+        // pitch. Replacing the reference axis only when that length is genuinely degenerate
+        // keeps the basis continuous. A threshold on the sine instead (this used to be 0.999 on
+        // the dot product) fires while the view is still 0.08 degrees from vertical, because
+        // the sine is flat there, and the replacement axis is unrelated to the one it replaced:
+        // the basis then turns by tens of degrees in a single step.
+        vec3 x_axis = up_ref.cross(z_axis);
+        if (x_axis.length() < 1e-6f)
+        {
+            const vec3 fallback = (std::fabs(z_axis.y) > 0.9f) ? vec3{0.0f, 0.0f, 1.0f}
+                                                               : vec3{0.0f, 1.0f, 0.0f};
+            x_axis = fallback.cross(z_axis);
+        }
+        x_axis = x_axis.normalized();
         const vec3 y_axis = z_axis.cross(x_axis);
 
         mat4 view;

@@ -172,7 +172,7 @@ flowchart LR
 | `src/core/platform/*` | core | 平台无关值类型 + 文件读取 | `Key`、`FrameInput`、`NativeWindowHandle`、`File` |
 | `src/core/log/*` | core | 日志（std-only） | `LogManager`、`LogStream`、`LOG_*` |
 | `src/*/{physics,loader,ecs,render/resources}` | — | 占位头文件，尚未实现 | — |
-| `tests/*.cpp` | 各测试目标 | 283 项检查（见 §12） | — |
+| `tests/*.cpp` | 各测试目标 | 285 项检查（见 §12） | — |
 | `shaders/basic.vert/.frag/.hlsl` | 资源 | 一份逻辑，三种方言 | — |
 
 ---
@@ -687,7 +687,7 @@ classDiagram
 | FPV 眼高 | `1.6 m` | `Character::eye_height` |
 | TPV 注视高度 | `1.6 m` | `Character::camera_target_height` |
 | TPV 偏移 | `(0, 0.4, 5)`，**相对 `cameraTarget()`**（= 脚底上方 2 m、后方 5 m） | `Character::camera_offset` |
-| TPV 轨道俯仰限位 | `[-89°, +89°]` | `Character::orbitCamera` |
+| TPV 轨道俯仰限位 | `[-89.9°, +89.9°]` | `Character::orbitCamera` |
 | TPV 距离钳制 | `[0.5, 100] m` | `Character::setCameraDistance` |
 | FPV 俯仰限位 | `[-85°, +85°]` | `Camera::yawPitch` 默认参数 |
 | 透视 | `fov 90°`、`near 0.1`、`far 100` | `Sandbox::resetCamera` |
@@ -800,14 +800,14 @@ flowchart LR
 
 ## 12. 测试与验证
 
-### 12.1 单测（`ctest` 4 套，共 283 项）
+### 12.1 单测（`ctest` 4 套，共 285 项）
 
 | 套件 | 链接 | 覆盖 | 检查项 |
 |---|---|---|---|
-| `tests/core_math_test.cpp` | 仅 `stv3d_core` | 列主序布局、`fromTRS` 的 S→R→T、`lookAt` 退化、透视两套裁剪空间、`ortho`、四元数、mat3/mat4 逆与行列式 | 67 |
+| `tests/core_math_test.cpp` | 仅 `stv3d_core` | 列主序布局、`fromTRS` 的 S→R→T、`lookAt` 退化、透视两套裁剪空间、`ortho`、四元数、mat3/mat4 逆与行列式、**lookAt 逼近垂直时基向量连续** | 68 |
 | `tests/core_log_test.cpp` | 仅 `stv3d_core` | 行格式与时间戳、级别标签、流式拼接、`logFixed/logHex`、**4 线程 × 50 行不丢不串**、init/shutdown 幂等与追加 | 26 |
 | `tests/core_geometry_test.cpp` | 仅 `stv3d_core` | 顶点 44 字节、`MeshData` 语义、立方体顶点/索引数、索引在范围内、无退化三角形、**12 面绕序一致朝外**、尺寸只改位置、法线单位且朝外 | 17 |
-| `tests/engine_test.cpp` | 仅 `stv3d_engine` | Camera（含 500 次随机旋转后无滚转且正交）、Model、Character/Controller（含 **TPV 缩放沿视线推进**）、**GameLoop**（累加器余数、10 秒卡顿只补 5 刻、pause/start、enqueue、非法参数、流式切片与 `OVERLOAD` 位）、**LoadQueue**（预载/流式两类互不干扰、预算 0/N、请求顺序、produce 失败跳过 apply、失败计数、取消、`clear`、运行中的项不算 pending）、**InputMapping**（edge 不粘滞、clearPerFrame 语义） | 173 |
+| `tests/engine_test.cpp` | 仅 `stv3d_engine` | Camera（含 500 次随机旋转后无滚转且正交）、Model、Character/Controller（含 **TPV 缩放沿视线推进**）、**GameLoop**（累加器余数、10 秒卡顿只补 5 刻、pause/start、enqueue、非法参数、流式切片与 `OVERLOAD` 位）、**LoadQueue**（预载/流式两类互不干扰、预算 0/N、请求顺序、produce 失败跳过 apply、失败计数、取消、`clear`、运行中的项不算 pending）、**InputMapping**（edge 不粘滞、clearPerFrame 语义） | 174 |
 
 ### 12.2 后端画面回归（单测覆盖不到的部分）
 

@@ -56,7 +56,8 @@ public:
     quat getOrientation() const { return orientation; }
 
     // Point the camera at `target`. The target and the up vector are converted into a
-    // quaternion and not stored afterwards.
+    // quaternion and not stored afterwards. `worldUp` only fixes the roll; a view that is
+    // exactly vertical cannot define one, and then the current roll is kept.
     void lookAt(const vec3& target, const vec3& worldUp = vec3{0.0f, 1.0f, 0.0f})
     {
         vec3 forward_dir = target - position;
@@ -66,15 +67,25 @@ public:
         }
         forward_dir = forward_dir.normalized();
 
-        vec3 up_axis = worldUp.normalized();
-        if (std::fabs(forward_dir.dot(up_axis)) > 0.999f)
+        // The cross product stays well conditioned however far the view pitches: as the view
+        // approaches vertical its length shrinks towards zero, but the direction it normalises
+        // does not depend on the pitch at all. Substituting a fixed world axis before the
+        // cross product is genuinely degenerate (as this used to, past 0.999) rotates the view
+        // by roughly 40 degrees the instant the view crosses that threshold.
+        vec3 right_dir = forward_dir.cross(worldUp.normalized());
+        if (right_dir.length() < 1e-6f)
         {
-            // View direction is (nearly) parallel to `up`: pick another reference axis so
-            // that the cross product below does not collapse to a zero vector.
-            up_axis = (forward_dir.y > 0.0f) ? vec3{0.0f, 0.0f, 1.0f} : vec3{0.0f, 0.0f, -1.0f};
+            // Exactly vertical: `worldUp` is parallel to the view and cannot define a roll.
+            // Keep the roll the camera already has instead of snapping to a fixed axis, so the
+            // orientation stays continuous through the pole. This is reached only within about
+            // 0.0001 degrees of vertical.
+            right_dir = forward_dir.cross(up());
+            if (right_dir.length() < 1e-6f)
+            {
+                right_dir = forward_dir.cross(vec3{0.0f, 0.0f, 1.0f});
+            }
         }
-
-        const vec3 right_dir = forward_dir.cross(up_axis).normalized();
+        right_dir = right_dir.normalized();
         const vec3 true_up = right_dir.cross(forward_dir);
 
         // Columns of the rotation matrix are the local basis vectors expressed in world

@@ -328,9 +328,13 @@ int main()
         }
         const vec3 dive_offset = dive.getCameraOffset();
         const float dive_pitch = std::atan2(dive_offset.y, std::hypot(dive_offset.x, dive_offset.z)) * 180.0f / kPi;
-        check(near(dive_pitch, -89.0f, 0.5f), "orbit: the downward pitch stops at -89 degrees");
-        check(std::hypot(dive_offset.x, dive_offset.z) > 0.01f,
-              "orbit: the offset keeps a horizontal part so lookAt cannot degenerate");
+        check(near(dive_pitch, -89.9f, 0.5f), "orbit: the downward pitch stops at -89.9 degrees");
+        // The clamp keeps the offset off the pole, so yaw still has a lever arm to rotate the
+        // view with. At 89.9 degrees and a 5 m radius that arm is about 8.8 mm, well clear of
+        // the 1e-6 the pitch axis guard in orbitCamera needs; the assertion allows the clamp to
+        // be raised to roughly 89.98 before it would fire.
+        check(std::hypot(dive_offset.x, dive_offset.z) > 1e-3f,
+              "orbit: the offset keeps a horizontal part, so yaw still has a lever arm");
 
         Character rise;
         for (int i = 0; i < 50; ++i)
@@ -339,7 +343,7 @@ int main()
         }
         const vec3 rise_offset = rise.getCameraOffset();
         const float rise_pitch = std::atan2(rise_offset.y, std::hypot(rise_offset.x, rise_offset.z)) * 180.0f / kPi;
-        check(near(rise_pitch, 89.0f, 0.5f), "orbit: the upward pitch stops at +89 degrees");
+        check(near(rise_pitch, 89.9f, 0.5f), "orbit: the upward pitch stops at +89.9 degrees");
         check(rise_offset.y > 0.0f, "orbit: the camera ends up above the character");
 
         Character zoom;
@@ -373,6 +377,39 @@ int main()
               "zoom: the closest setting leaves 0.5 m to the look-at target");
         check(dolly.getCamera().getPosition().y > target.y - 0.5f,
               "zoom: zooming in does not sink the camera towards the feet");
+
+        // Pitching to vertical must not snap the roll. lookAt used to swap worldUp for a
+        // fixed world axis once the view came within 0.999 of vertical, which rotated the
+        // view by about 40 degrees in a single step at pitch 87.45 and pinned the up axis
+        // to -Z for every steeper view. The sweep is sequential, the way the camera is
+        // actually driven, so it also covers the exactly-vertical step at the end.
+        Character sweep;
+        vec3 previous_up{};
+        bool first_sample = true;
+        float worst_step_degrees = 0.0f;
+        for (float pitch = 86.0f; pitch <= 90.0001f; pitch += 0.05f)
+        {
+            const float radians = pitch * kPi / 180.0f;
+            sweep.setCameraOffset(vec3{std::sin(0.7f) * std::cos(radians), std::sin(radians),
+                                       std::cos(0.7f) * std::cos(radians)} * 5.0f);
+            const vec3 current_up = sweep.getCamera().up();
+            if (first_sample)
+            {
+                // The jump onto the sweep's first sample starts from the default placement and
+                // is not part of the sweep, so it is not measured.
+                first_sample = false;
+            }
+            else
+            {
+                float cosine = previous_up.dot(current_up);
+                if (cosine > 1.0f) cosine = 1.0f;
+                if (cosine < -1.0f) cosine = -1.0f;
+                const float step_degrees = std::acos(cosine) * 180.0f / kPi;
+                if (step_degrees > worst_step_degrees) worst_step_degrees = step_degrees;
+            }
+            previous_up = current_up;
+        }
+        check(worst_step_degrees < 1.0f, "orbit: the roll stays continuous all the way to vertical");
     }
 
     // ============================== game loop ==============================

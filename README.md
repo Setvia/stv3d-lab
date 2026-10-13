@@ -106,7 +106,7 @@ stv3d-lab/
 │   ├─ core_math_test.cpp      core 数学单测（67 项，纯 g++，无窗口无 GPU）
 │   ├─ core_log_test.cpp       日志单测（26 项，含 4 线程并发写）
 │   ├─ core_geometry_test.cpp  几何生成单测（17 项：索引范围/绕序/尺寸/法线）
-│   └─ engine_test.cpp         engine 单测：摄像机/模型/角色/主循环/加载队列/输入映射（173 项）
+│   └─ engine_test.cpp         engine 单测：摄像机/模型/角色/主循环/加载队列/输入映射（174 项）
 ├─ .vscode/                    tasks.json（CMake 构建）/ launch.json（gdb）/ c_cpp_properties.json
 ├─ .gitignore                  build/、*.exe、*.dll、*.log 等
 ├─ ARCHITECTURE.md             架构描述文件
@@ -261,6 +261,11 @@ stv3d-lab (exe)  main.cpp：裸消息泵 + 游戏循环
 设计要点：偏航只绕世界 Y、俯仰只绕自身 X ⇒ **滚转恒为 0、无万向锁**；俯仰限位靠"钳制目标俯仰角、
 只转差值"实现，**全程不保存欧拉角**；`moveLocal` 因此也不需要任何退化保护。
 
+`lookAt` 的滚转由 `worldUp` 决定，而 `forward × worldUp` **在任意俯仰角下都良态**：接近垂直时它的长度
+趋零，但被归一化的方向与俯仰角无关。所以只有视线精确垂直时才需要换参考轴，而且那时沿用相机**已有的
+滚转**、不切到固定世界轴——否则视线跨过阈值时会瞬间转过几十度。TPV 能拉到 `±89.9°`，所以这一条是
+必需的，不是防御性的。
+
 > `near` / `far` 是 `<windows.h>` 里的**宏**，所以成员变量叫
 > `near_plane` / `far_plane`，不能用裸名 `near` / `far`。
 
@@ -275,7 +280,7 @@ stv3d-lab (exe)  main.cpp：裸消息泵 + 游戏循环
   **朝向由玩家控制、syncCamera 不覆盖**；TPV 相机在 `cameraTarget() + offset(0,0.4,5)`，
   其中 `cameraTarget()` = `position + (0, camera_target_height=1.6, 0)` 即头部，`lookAt` 的也是同一个点
 - TPV 轨道：`orbitCamera(yaw, pitch)`（四元数**以 `cameraTarget()` 为支点**旋转偏移向量，
-  俯仰限位 `[-89°, 89°]`，见 `Character.cpp` 常量）、`setCameraDistance()`（沿到 `cameraTarget()`
+  俯仰限位 `[-89.9°, 89.9°]`，见 `Character.cpp` 常量）、`setCameraDistance()`（沿到 `cameraTarget()`
   的连线推进，钳制 0.5~100 m）、`getCameraOffset()` / `cameraDistance()`（都相对 `cameraTarget()`）
 
 ### `IRenderDevice` / `ICommandList`（src/render/rhi/ → `stv3d_render`，backend 无关）
@@ -550,8 +555,8 @@ ctest --test-dir build            # 或直接跑 build\stv3d_*_tests.exe
 
 | 套件 | 覆盖 | 检查项 |
 |---|---|---|
-| `tests/core_math_test.cpp` | 列主序布局与 `at/column/translation`、乘法与结合、`fromTRS` 的 S→R→T、`lookAt`（含视线与 up 平行退化）、透视投影 **GL[-1,1] 与 Vulkan[0,1]+flipY 两套**、`ortho` 两套、四元数（轴角/复合顺序/共轭/归一化/fromTo/slerp/`fromMat3`↔`toMat3` 一致性）、mat3 逆与行列式、mat4 行列式与逆（含奇异→单位阵） | 67 |
-| `tests/engine_test.cpp` | 摄像机（默认机位、viewMatrix 映射、lookAt、世界/局部旋转、俯仰限位、500 次随机旋转后仍无滚转且正交、moveLocal、**GL/Vulkan 两套投影 + flipY**、fov/aspect 钳制）、模型（S→R→T、`fromTRS` 等价、四元数累积、自转积分、负 dt 不推进）、角色控制器（方向/归一化/疾跑/俯视不出水平面）、角色（TPV 摆放与注视、FPV 眼睛高度与朝向不被覆盖、切模式、轨道限位 ±89°、距离钳制 0.5/100、**缩放沿视线推进且不改变视线方向**）、**GameLoop**（固定步长整除、累加器余数、10 秒卡顿只补 5 刻且丢弃积压、pause 停逻辑刻但帧照跑、start 恢复、`enqueue` 只跑一次、三种 scheduler 任务、零/负 dt 不推进、非法参数回退）、**InputMapping**（空帧无意图、W/↑ 都是前进、SAD+方向键、Space/E 跳跃意图、Shift 疾跑、F5/R/Esc 都是 edge 不粘滞、关闭按钮也算退出、`clearPerFrame` 清每帧量但保留按键与光标）、**LoadQueue**（预载与流式互不干扰、预算 0/N、请求顺序即完成顺序、produce 失败跳过 apply、失败计数、取消只对排队项有效、`clear` 清计数、运行中的项不算 pending、`init()` 不丢启动前登记的请求、`OVERLOAD` 位随队列空闲翻转、`exit()` 丢弃排队项） | 173 |
+| `tests/core_math_test.cpp` | 列主序布局与 `at/column/translation`、乘法与结合、`fromTRS` 的 S→R→T、`lookAt`（含视线与 up 平行退化）、透视投影 **GL[-1,1] 与 Vulkan[0,1]+flipY 两套**、`ortho` 两套、四元数（轴角/复合顺序/共轭/归一化/fromTo/slerp/`fromMat3`↔`toMat3` 一致性）、mat3 逆与行列式、mat4 行列式与逆（含奇异→单位阵）、**lookAt 逼近垂直时基向量连续** | 68 |
+| `tests/engine_test.cpp` | 摄像机（默认机位、viewMatrix 映射、lookAt、世界/局部旋转、俯仰限位、500 次随机旋转后仍无滚转且正交、moveLocal、**GL/Vulkan 两套投影 + flipY**、fov/aspect 钳制）、模型（S→R→T、`fromTRS` 等价、四元数累积、自转积分、负 dt 不推进）、角色控制器（方向/归一化/疾跑/俯视不出水平面）、角色（TPV 摆放与注视、FPV 眼睛高度与朝向不被覆盖、切模式、轨道限位 ±89.9°、距离钳制 0.5/100、**缩放沿视线推进且不改变视线方向**）、**GameLoop**（固定步长整除、累加器余数、10 秒卡顿只补 5 刻且丢弃积压、pause 停逻辑刻但帧照跑、start 恢复、`enqueue` 只跑一次、三种 scheduler 任务、零/负 dt 不推进、非法参数回退）、**InputMapping**（空帧无意图、W/↑ 都是前进、SAD+方向键、Space/E 跳跃意图、Shift 疾跑、F5/R/Esc 都是 edge 不粘滞、关闭按钮也算退出、`clearPerFrame` 清每帧量但保留按键与光标）、**LoadQueue**（预载与流式互不干扰、预算 0/N、请求顺序即完成顺序、produce 失败跳过 apply、失败计数、取消只对排队项有效、`clear` 清计数、运行中的项不算 pending、`init()` 不丢启动前登记的请求、`OVERLOAD` 位随队列空闲翻转、`exit()` 丢弃排队项） | 174 |
 | `tests/core_log_test.cpp` | 行格式（`时间戳 [级别] 内容`、逐位校验时间戳）、四个级别的标签、流式拼接（int/`std::string`/bool）、`logFixed`/`logHex` 的精度与状态还原、**4 线程 × 50 行不丢行不串行**、init/shutdown/再 init 的幂等与追加语义、init 之前写 stderr 不丢消息 | 26 |
 | `tests/core_geometry_test.cpp` | 顶点格式尺寸（44 字节，即 pipeline 被告知的 stride）、`MeshData` 的 `empty`/`triangleCount`/`clear`、立方体的顶点/索引数、**索引全在范围内**、**无退化三角形**、**12 个面全部朝外（绕序一致）**、尺寸只改位置不改颜色、法线单位长度且朝外 | 17 |
 
@@ -598,7 +603,7 @@ ctest --test-dir build            # 或直接跑 build\stv3d_*_tests.exe
 - `GameLoop` 的 `pause()` / `exit()` 与状态位已由单测覆盖，但应用还没接（可以绑到暂停键上）
 - `nlohmann-json` 已安装但未使用；目前**所有参数仍是代码内常量**，可统一抽成 `config.json`
 - 自由飞行的调试相机已移除（只剩 FPV / TPV）；如需"上帝视角"可加第三个 `CameraView`
-- TPV 俯仰限位为 `[-89°, 89°]`：相机会绕到角色**下方**（当前没有地面，所以不会穿地）
+- TPV 俯仰限位为 `[-89.9°, 89.9°]`：相机会绕到角色**下方**（当前没有地面，所以不会穿地）
 - 网格只有立方体一种；`MeshGen` 可继续加球/平面，或写 OBJ 读取器
 - 立方体六个面统一 CCW 朝外（几何单测会检查），将来开 `GL_CULL_FACE` 可以直接用
 - **RHI v1 的取舍**：常量按"每 draw × 每帧在飞"分槽（Vulkan 必须如此），但每帧仍只用一个 command list、

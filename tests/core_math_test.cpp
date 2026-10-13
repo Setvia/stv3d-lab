@@ -151,6 +151,36 @@ int main()
             finite = finite && std::isfinite(value);
         }
         check(finite, "lookAt stays finite when the view direction is parallel to up");
+
+        // The basis must not rotate abruptly as the view approaches vertical. A reference axis
+        // used to be substituted once the view came within 0.999 of up, which turned the basis
+        // by about 40 degrees in a single step at 87.45 degrees of pitch.
+        vec3 previous_x{};
+        bool first_step = true;
+        float worst_step_degrees = 0.0f;
+        for (float degrees = 86.0f; degrees <= 89.99f; degrees += 0.05f)
+        {
+            const float radians = degrees * kPi / 180.0f;
+            const vec3 eye{std::sin(0.7f) * std::cos(radians), std::sin(radians),
+                           std::cos(0.7f) * std::cos(radians)};
+            const mat4 view = mat4::lookAt(eye * 5.0f, vec3{0.0f, 0.0f, 0.0f}, vec3{0.0f, 1.0f, 0.0f});
+            const vec3 x_axis{view.m[0], view.m[4], view.m[8]};
+            if (first_step)
+            {
+                first_step = false;
+            }
+            else
+            {
+                float cosine = previous_x.dot(x_axis);
+                if (cosine > 1.0f) cosine = 1.0f;
+                if (cosine < -1.0f) cosine = -1.0f;
+                const float step_degrees = std::acos(cosine) * 180.0f / kPi;
+                if (step_degrees > worst_step_degrees) worst_step_degrees = step_degrees;
+            }
+            previous_x = x_axis;
+        }
+        check(worst_step_degrees < 1.0f,
+              "lookAt keeps its basis continuous as the view approaches vertical");
     }
 
     // ----------------------------------------------------------- perspective

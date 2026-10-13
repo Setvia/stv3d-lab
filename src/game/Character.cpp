@@ -8,10 +8,10 @@
 namespace
 {
 // Orbit limits: the pitch is the angle of the camera offset above the horizontal plane.
-// [-89, 89] keeps the offset from becoming parallel to `up`, which would make lookAt
-// degenerate.
-constexpr float kMinPitchDegrees = -89.0f;
-constexpr float kMaxPitchDegrees = 89.0f;
+// Just short of vertical: at exactly 90 the offset is parallel to `up`, so yaw would stop
+// moving the camera and the roll would have no lever arm to act on.
+constexpr float kMinPitchDegrees = -89.9f;
+constexpr float kMaxPitchDegrees = 89.9f;
 constexpr float kMinCameraDistance = 0.5f;
 constexpr float kMaxCameraDistance = 100.0f;
 constexpr float kPi = 3.14159265358979323846f;
@@ -136,7 +136,7 @@ void Character::orbitCamera(float yawDegrees, float pitchDegrees)
     }
 
     // (2) Pitch: rotate around the horizontal axis perpendicular to the offset, with the
-    // angle between the offset and the horizontal plane clamped to [5, 89] degrees.
+    // angle between the offset and the horizontal plane clamped to [-89.9, 89.9] degrees.
     if (pitchDegrees != 0.0f)
     {
         const float horizontal = std::hypot(offset.x, offset.z);
