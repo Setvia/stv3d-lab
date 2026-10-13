@@ -112,10 +112,12 @@ void Character::syncCamera()
         return;
     }
 
-    // Third person: camera at "position + offset", looking at the character. The look-at
-    // target height is controlled by camera_target_height (0 = the feet).
-    camera.setPosition(position + camera_offset);
-    camera.lookAt(position + vec3{0.0f, camera_target_height, 0.0f});
+    // Third person: the camera sits on an offset from the look-at target and aims at it, so
+    // the orbit pivot and the view target are one point. camera_target_height sets how high
+    // that point is above the feet.
+    const vec3 target = cameraTarget();
+    camera.setPosition(target + camera_offset);
+    camera.lookAt(target);
 }
 
 void Character::orbitCamera(float yawDegrees, float pitchDegrees)
@@ -163,7 +165,7 @@ void Character::setCameraDistance(float distance)
     const float current = camera_offset.length();
     if (current < 1e-6f)
     {
-        camera_offset = vec3{0.0f, 2.0f, distance};
+        camera_offset = vec3{0.0f, 0.0f, distance};  // no elevation to preserve: sit level behind
     }
     else
     {

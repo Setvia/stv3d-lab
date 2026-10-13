@@ -63,7 +63,7 @@ public:
     // ---------- view mode ----------
     // FPV: the camera sits at eye height and its orientation is fully driven by the mouse
     //      (syncCamera must not touch the orientation)
-    // TPV: the camera sits at "position + offset" and looks at the character
+    // TPV: the camera sits at "cameraTarget() + offset" and looks at cameraTarget()
     void setView(CameraView view);
     CameraView getView() const { return view; }
 
@@ -92,7 +92,15 @@ public:
     const CharacterController& getController() const { return controller; }
 
     // ---------- TPV orbit ----------
-    // Camera offset relative to the character (third person: behind and above)
+    // The point the third-person camera orbits and looks at: the character plus
+    // camera_target_height, i.e. the head. The orbit offset, the dolly and lookAt are all
+    // measured from here, so moving in or out travels along the line to what is being looked
+    // at. Measuring the offset from `position` instead puts the pivot at the feet while the
+    // view stays anchored at the head: the two then drift apart as the camera moves, which
+    // tilts the view and sinks the camera towards the origin.
+    vec3 cameraTarget() const { return position + vec3{0.0f, camera_target_height, 0.0f}; }
+
+    // Camera offset relative to cameraTarget() (third person: behind and above)
     void setCameraOffset(const vec3& offset)
     {
         camera_offset = offset;
@@ -100,18 +108,21 @@ public:
     }
     vec3 getCameraOffset() const { return camera_offset; }
 
-    // Mouse drag: orbit around the character. The pitch (angle of the offset above the
-    // horizontal plane) is clamped to [minPitch, maxPitch] degrees so that the camera
-    // cannot dive under the character's feet or flip over its head.
+    // Mouse drag: orbit around cameraTarget(). The pitch (angle of the offset above the
+    // horizontal plane) is clamped to [minPitch, maxPitch] degrees so that the offset cannot
+    // become parallel to `up`, which is what would make lookAt degenerate.
     void orbitCamera(float yawDegrees, float pitchDegrees);
 
-    // Wheel: move closer / further away, clamped to [0.5, 100] metres
+    // Wheel: move closer / further away, clamped to [0.5, 100] metres. The distance is
+    // measured to cameraTarget(), so the point being looked at holds its place on screen.
     void setCameraDistance(float distance);
     float cameraDistance() const { return camera_offset.length(); }
 
 private:
     vec3 position{0.0f, 0.0f, 0.0f};
-    vec3 camera_offset{0.0f, 2.0f, 5.0f};
+    // Relative to cameraTarget(), not to the feet: (0, 0.4, 5) places the camera 2 m above
+    // the character's feet and 5 m behind, which is what the old feet-relative (0, 2, 5) meant.
+    vec3 camera_offset{0.0f, 0.4f, 5.0f};
     float camera_target_height = 1.6f;  // TPV: the point the camera looks at (head height)
     float eye_height = 1.6f;            // FPV: eye height above the feet
     CameraView view = CameraView::TPV;

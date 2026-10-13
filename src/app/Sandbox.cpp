@@ -441,7 +441,7 @@ void Sandbox::updateCharacter(float dt)
 void Sandbox::resetCamera()
 {
     character.setPosition(vec3{0.0f, 0.0f, 0.0f});
-    character.setCameraOffset(vec3{0.0f, 2.0f, 5.0f});  // reset the TPV orbit offset
+    character.setCameraOffset(vec3{0.0f, 0.4f, 5.0f});  // reset the TPV orbit offset (target-relative)
 
     Camera &camera = character.getCamera();
     camera.setOrientation(quat{});  // identity quaternion = looking down -Z, up is +Y

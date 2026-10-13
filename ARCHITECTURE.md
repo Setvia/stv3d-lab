@@ -10,19 +10,6 @@
 
 ---
 
-## 0. 一句话
-
-一个 Win32 + 多后端渲染原型：上层只认识自研的 `IRenderDevice`，
-OpenGL 4.3 / Vulkan 1.2 / Direct3D 11 三个后端各自实现它，用
-
-```powershell
-.\build\stv3d-lab.exe --api gl | vk | d3d11
-```
-
-切换。渲染同一个场景（3 个自转立方体 + 角色占位）。
-
----
-
 ## 1. 全景：分层与依赖方向
 
 依赖**严格单向向下**：`core` 与 `engine` 目标只带 `src/` 一个 include 目录（编译期强制，见 §2.3）。
@@ -185,7 +172,7 @@ flowchart LR
 | `src/core/platform/*` | core | 平台无关值类型 + 文件读取 | `Key`、`FrameInput`、`NativeWindowHandle`、`File` |
 | `src/core/log/*` | core | 日志（std-only） | `LogManager`、`LogStream`、`LOG_*` |
 | `src/*/{physics,loader,ecs,render/resources}` | — | 占位头文件，尚未实现 | — |
-| `tests/*.cpp` | 各测试目标 | 277 项检查（见 §12） | — |
+| `tests/*.cpp` | 各测试目标 | 283 项检查（见 §12） | — |
 | `shaders/basic.vert/.frag/.hlsl` | 资源 | 一份逻辑，三种方言 | — |
 
 ---
@@ -625,6 +612,7 @@ classDiagram
         +syncCamera()
         +getPosition() / setPosition(v)
         +getCamera() / getController()
+        +cameraTarget() vec3
         +setCameraOffset(v) / getCameraOffset()
         +orbitCamera(yawDeg, pitchDeg)
         +setCameraDistance(d) / cameraDistance()
@@ -698,7 +686,7 @@ classDiagram
 | 行走 / 疾跑 | `5 / 9 m/s` | `CharacterController::Speeds` |
 | FPV 眼高 | `1.6 m` | `Character::eye_height` |
 | TPV 注视高度 | `1.6 m` | `Character::camera_target_height` |
-| TPV 偏移 | `(0, 2, 5)` | `Character::camera_offset` |
+| TPV 偏移 | `(0, 0.4, 5)`，**相对 `cameraTarget()`**（= 脚底上方 2 m、后方 5 m） | `Character::camera_offset` |
 | TPV 轨道俯仰限位 | `[-89°, +89°]` | `Character::orbitCamera` |
 | TPV 距离钳制 | `[0.5, 100] m` | `Character::setCameraDistance` |
 | FPV 俯仰限位 | `[-85°, +85°]` | `Camera::yawPitch` 默认参数 |
@@ -812,14 +800,14 @@ flowchart LR
 
 ## 12. 测试与验证
 
-### 12.1 单测（`ctest` 4 套，共 277 项）
+### 12.1 单测（`ctest` 4 套，共 283 项）
 
 | 套件 | 链接 | 覆盖 | 检查项 |
 |---|---|---|---|
 | `tests/core_math_test.cpp` | 仅 `stv3d_core` | 列主序布局、`fromTRS` 的 S→R→T、`lookAt` 退化、透视两套裁剪空间、`ortho`、四元数、mat3/mat4 逆与行列式 | 67 |
 | `tests/core_log_test.cpp` | 仅 `stv3d_core` | 行格式与时间戳、级别标签、流式拼接、`logFixed/logHex`、**4 线程 × 50 行不丢不串**、init/shutdown 幂等与追加 | 26 |
 | `tests/core_geometry_test.cpp` | 仅 `stv3d_core` | 顶点 44 字节、`MeshData` 语义、立方体顶点/索引数、索引在范围内、无退化三角形、**12 面绕序一致朝外**、尺寸只改位置、法线单位且朝外 | 17 |
-| `tests/engine_test.cpp` | 仅 `stv3d_engine` | Camera（含 500 次随机旋转后无滚转且正交）、Model、Character/Controller、**GameLoop**（累加器余数、10 秒卡顿只补 5 刻、pause/start、enqueue、非法参数、流式切片与 `OVERLOAD` 位）、**LoadQueue**（预载/流式两类互不干扰、预算 0/N、请求顺序、produce 失败跳过 apply、失败计数、取消、`clear`、运行中的项不算 pending）、**InputMapping**（edge 不粘滞、clearPerFrame 语义） | 167 |
+| `tests/engine_test.cpp` | 仅 `stv3d_engine` | Camera（含 500 次随机旋转后无滚转且正交）、Model、Character/Controller（含 **TPV 缩放沿视线推进**）、**GameLoop**（累加器余数、10 秒卡顿只补 5 刻、pause/start、enqueue、非法参数、流式切片与 `OVERLOAD` 位）、**LoadQueue**（预载/流式两类互不干扰、预算 0/N、请求顺序、produce 失败跳过 apply、失败计数、取消、`clear`、运行中的项不算 pending）、**InputMapping**（edge 不粘滞、clearPerFrame 语义） | 173 |
 
 ### 12.2 后端画面回归（单测覆盖不到的部分）
 

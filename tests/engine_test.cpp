@@ -272,11 +272,12 @@ int main()
     {
         Character character;
         check(character.getView() == CameraView::TPV, "character: default view is TPV");
-        check(near3(character.getCamera().getPosition(), character.getPosition() + character.getCameraOffset()),
-              "character: TPV camera sits at position + offset");
+        check(near3(character.getCamera().getPosition(),
+                    character.cameraTarget() + character.getCameraOffset()),
+              "character: TPV camera sits at cameraTarget() + offset");
         check(near3(character.getCamera().forward(),
-                    (character.getPosition() + vec3{0.0f, 1.6f, 0.0f} - character.getCamera().getPosition()).normalized()),
-              "character: TPV camera looks at the character");
+                    (character.cameraTarget() - character.getCamera().getPosition()).normalized()),
+              "character: TPV camera looks at cameraTarget()");
 
         // FPV keeps the player's orientation
         character.getCamera().yawPitch(35.0f, -12.0f);
@@ -303,7 +304,8 @@ int main()
 
         // Back to TPV: the orbit offset survives and the camera looks at the character again
         character.setView(CameraView::TPV);
-        check(near3(character.getCamera().getPosition(), character.getPosition() + character.getCameraOffset()),
+        check(near3(character.getCamera().getPosition(),
+                    character.cameraTarget() + character.getCameraOffset()),
               "character: switching back to TPV restores the orbit placement");
         check(near3(character.getCamera().forward(),
                     (character.getPosition() + vec3{0.0f, 1.6f, 0.0f} - character.getCamera().getPosition()).normalized()),
@@ -347,6 +349,30 @@ int main()
         check(near(zoom.cameraDistance(), 0.5f), "zoom: too close is clamped to 0.5");
         zoom.setCameraDistance(999.0f);
         check(near(zoom.cameraDistance(), 100.0f), "zoom: too far is clamped to 100");
+
+        // The dolly has to travel along the line to the point being looked at. While the offset
+        // was measured from the feet, zooming slid the camera down towards the origin while
+        // lookAt stayed on the head, so the view pitched up by ~1.9 degrees on the first notch
+        // and ran away to ~72 degrees near the closest setting.
+        Character dolly;
+        const vec3 target = dolly.cameraTarget();
+        const vec3 view_before = dolly.getCamera().forward();
+        const float one_notch_in = dolly.cameraDistance() - 0.5f;
+
+        dolly.setCameraDistance(one_notch_in);
+        check(near(dolly.cameraDistance(), one_notch_in),
+              "zoom: the distance asked for is the distance held");
+        check(near3(dolly.getCamera().forward(), view_before),
+              "zoom: dollying does not change the view direction");
+        check(near((dolly.getCamera().getPosition() - target).length(), one_notch_in),
+              "zoom: the reported distance is the distance to the look-at target");
+        check(near3(dolly.cameraTarget(), target), "zoom: the camera keeps orbiting the same point");
+
+        dolly.setCameraDistance(0.5f);
+        check(near((dolly.getCamera().getPosition() - target).length(), 0.5f),
+              "zoom: the closest setting leaves 0.5 m to the look-at target");
+        check(dolly.getCamera().getPosition().y > target.y - 0.5f,
+              "zoom: zooming in does not sink the camera towards the feet");
     }
 
     // ============================== game loop ==============================

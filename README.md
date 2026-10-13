@@ -106,9 +106,11 @@ stv3d-lab/
 │   ├─ core_math_test.cpp      core 数学单测（67 项，纯 g++，无窗口无 GPU）
 │   ├─ core_log_test.cpp       日志单测（26 项，含 4 线程并发写）
 │   ├─ core_geometry_test.cpp  几何生成单测（17 项：索引范围/绕序/尺寸/法线）
-│   └─ engine_test.cpp         engine 单测：摄像机/模型/角色/主循环/加载队列/输入映射（167 项）
+│   └─ engine_test.cpp         engine 单测：摄像机/模型/角色/主循环/加载队列/输入映射（173 项）
 ├─ .vscode/                    tasks.json（CMake 构建）/ launch.json（gdb）/ c_cpp_properties.json
 ├─ .gitignore                  build/、*.exe、*.dll、*.log 等
+├─ ARCHITECTURE.md             架构描述文件
+├─ ROADMAP.md                  分层目标推进计划
 └─ README.md                   本文件
 ```
 
@@ -270,10 +272,11 @@ stv3d-lab (exe)  main.cpp：裸消息泵 + 游戏循环
 - 角色：`update(dt)`（推进 + 摆摄像机）、`syncCamera()`、`getPosition()` / `setPosition()`、
   `getCamera()`、`getController()`
 - 人称：`setView(CameraView)` / `getView()`；FPV 相机在 `position + (0, eyeHeight=1.6, 0)`，
-  **朝向由玩家控制、syncCamera 不覆盖**；TPV 相机在 `position + offset(0,2,5)`，
-  `lookAt` 角色头部（`camera_target_height = 1.6`）
-- TPV 轨道：`orbitCamera(yaw, pitch)`（四元数旋转偏移向量，俯仰限位 `[-89°, 89°]`，见 `Character.cpp` 常量）、
-  `setCameraDistance()`（钳制 0.5~100 m）、`getCameraOffset()` / `cameraDistance()`
+  **朝向由玩家控制、syncCamera 不覆盖**；TPV 相机在 `cameraTarget() + offset(0,0.4,5)`，
+  其中 `cameraTarget()` = `position + (0, camera_target_height=1.6, 0)` 即头部，`lookAt` 的也是同一个点
+- TPV 轨道：`orbitCamera(yaw, pitch)`（四元数**以 `cameraTarget()` 为支点**旋转偏移向量，
+  俯仰限位 `[-89°, 89°]`，见 `Character.cpp` 常量）、`setCameraDistance()`（沿到 `cameraTarget()`
+  的连线推进，钳制 0.5~100 m）、`getCameraOffset()` / `cameraDistance()`（都相对 `cameraTarget()`）
 
 ### `IRenderDevice` / `ICommandList`（src/render/rhi/ → `stv3d_render`，backend 无关）
 应用只跟这一层打交道；具体图形 API 藏在实现里（当前 `GLRenderDevice`）。
@@ -548,7 +551,7 @@ ctest --test-dir build            # 或直接跑 build\stv3d_*_tests.exe
 | 套件 | 覆盖 | 检查项 |
 |---|---|---|
 | `tests/core_math_test.cpp` | 列主序布局与 `at/column/translation`、乘法与结合、`fromTRS` 的 S→R→T、`lookAt`（含视线与 up 平行退化）、透视投影 **GL[-1,1] 与 Vulkan[0,1]+flipY 两套**、`ortho` 两套、四元数（轴角/复合顺序/共轭/归一化/fromTo/slerp/`fromMat3`↔`toMat3` 一致性）、mat3 逆与行列式、mat4 行列式与逆（含奇异→单位阵） | 67 |
-| `tests/engine_test.cpp` | 摄像机（默认机位、viewMatrix 映射、lookAt、世界/局部旋转、俯仰限位、500 次随机旋转后仍无滚转且正交、moveLocal、**GL/Vulkan 两套投影 + flipY**、fov/aspect 钳制）、模型（S→R→T、`fromTRS` 等价、四元数累积、自转积分、负 dt 不推进）、角色控制器（方向/归一化/疾跑/俯视不出水平面）、角色（TPV 摆放与注视、FPV 眼睛高度与朝向不被覆盖、切模式、轨道限位 ±89°、距离钳制 0.5/100）、**GameLoop**（固定步长整除、累加器余数、10 秒卡顿只补 5 刻且丢弃积压、pause 停逻辑刻但帧照跑、start 恢复、`enqueue` 只跑一次、三种 scheduler 任务、零/负 dt 不推进、非法参数回退）、**InputMapping**（空帧无意图、W/↑ 都是前进、SAD+方向键、Space/E 跳跃意图、Shift 疾跑、F5/R/Esc 都是 edge 不粘滞、关闭按钮也算退出、`clearPerFrame` 清每帧量但保留按键与光标）、**LoadQueue**（预载与流式互不干扰、预算 0/N、请求顺序即完成顺序、produce 失败跳过 apply、失败计数、取消只对排队项有效、`clear` 清计数、运行中的项不算 pending、`init()` 不丢启动前登记的请求、`OVERLOAD` 位随队列空闲翻转、`exit()` 丢弃排队项） | 167 |
+| `tests/engine_test.cpp` | 摄像机（默认机位、viewMatrix 映射、lookAt、世界/局部旋转、俯仰限位、500 次随机旋转后仍无滚转且正交、moveLocal、**GL/Vulkan 两套投影 + flipY**、fov/aspect 钳制）、模型（S→R→T、`fromTRS` 等价、四元数累积、自转积分、负 dt 不推进）、角色控制器（方向/归一化/疾跑/俯视不出水平面）、角色（TPV 摆放与注视、FPV 眼睛高度与朝向不被覆盖、切模式、轨道限位 ±89°、距离钳制 0.5/100、**缩放沿视线推进且不改变视线方向**）、**GameLoop**（固定步长整除、累加器余数、10 秒卡顿只补 5 刻且丢弃积压、pause 停逻辑刻但帧照跑、start 恢复、`enqueue` 只跑一次、三种 scheduler 任务、零/负 dt 不推进、非法参数回退）、**InputMapping**（空帧无意图、W/↑ 都是前进、SAD+方向键、Space/E 跳跃意图、Shift 疾跑、F5/R/Esc 都是 edge 不粘滞、关闭按钮也算退出、`clearPerFrame` 清每帧量但保留按键与光标）、**LoadQueue**（预载与流式互不干扰、预算 0/N、请求顺序即完成顺序、produce 失败跳过 apply、失败计数、取消只对排队项有效、`clear` 清计数、运行中的项不算 pending、`init()` 不丢启动前登记的请求、`OVERLOAD` 位随队列空闲翻转、`exit()` 丢弃排队项） | 173 |
 | `tests/core_log_test.cpp` | 行格式（`时间戳 [级别] 内容`、逐位校验时间戳）、四个级别的标签、流式拼接（int/`std::string`/bool）、`logFixed`/`logHex` 的精度与状态还原、**4 线程 × 50 行不丢行不串行**、init/shutdown/再 init 的幂等与追加语义、init 之前写 stderr 不丢消息 | 26 |
 | `tests/core_geometry_test.cpp` | 顶点格式尺寸（44 字节，即 pipeline 被告知的 stride）、`MeshData` 的 `empty`/`triangleCount`/`clear`、立方体的顶点/索引数、**索引全在范围内**、**无退化三角形**、**12 个面全部朝外（绕序一致）**、尺寸只改位置不改颜色、法线单位长度且朝外 | 17 |
 
