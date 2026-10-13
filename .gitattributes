@@ -23,9 +23,15 @@
 *.o      binary
 *.pdb    binary
 
-# Images and binary model containers. The text siblings (*.gltf, *.obj as a
-# Wavefront model) are deliberately not listed: text=auto classifies them by
-# content, and *.obj is ambiguous with a compiler object file.
+# Text asset formats, declared rather than left to content sniffing. In this project
+# *.obj is a Wavefront model, never a compiler object file: the build writes its object
+# files into build/, which .gitignore excludes as a directory. Declaring it text keeps model
+# assets normalised to LF like every other source file, so a model loaded on Linux is
+# byte-identical to the one tested on Windows. *.gltf and *.json are already covered by
+# text=auto.
+*.obj    text
+
+# Images and binary model containers.
 *.png    binary
 *.jpg    binary
 *.jpeg   binary

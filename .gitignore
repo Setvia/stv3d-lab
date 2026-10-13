@@ -26,6 +26,9 @@ ui_*.h
 *.user.*
 
 # ---- Compiled objects / binaries ----
+# *.obj is deliberately NOT listed here. CMake with the MinGW generator writes its object
+# files into build/, which is ignored as a directory above, so they stay out either way.
+# Ignoring the extension instead would silently swallow Wavefront .obj model assets.
 *.exe
 *.dll
 *.so
@@ -33,7 +36,6 @@ ui_*.h
 *.dylib
 *.a
 *.lib
-*.obj
 *.o
 *.lo
 *.pdb
