@@ -1,0 +1,43 @@
+# Line endings and file types.
+#
+# The repository stores every text file with LF. Without this file the checked-out
+# form depends on each machine's core.autocrlf, so a clone with a different setting
+# produces spurious whole-file diffs.
+#
+# All sources are ASCII, or UTF-8 without a BOM. Do not add a BOM to accommodate
+# Windows PowerShell 5.1: its Get-Content falls back to the ANSI code page for
+# BOM-less files and misreads the Chinese documents, while every compiler, editor
+# and Git itself read UTF-8 correctly.
+
+# Text files are normalised to LF on commit and checked out as LF, so the working
+# tree no longer depends on core.autocrlf.
+* text=auto eol=lf
+
+# Binary files: never normalise, never treat as text. A file git's content sniffing
+# mistook for text would be corrupted by end-of-line translation.
+*.spv    binary
+*.dll    binary
+*.exe    binary
+*.lib    binary
+*.a      binary
+*.o      binary
+*.pdb    binary
+
+# Images and binary model containers. The text siblings (*.gltf, *.obj as a
+# Wavefront model) are deliberately not listed: text=auto classifies them by
+# content, and *.obj is ambiguous with a compiler object file.
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.ico    binary
+*.bmp    binary
+*.tga    binary
+*.dds    binary
+*.ktx    binary
+*.ktx2   binary
+*.glb    binary
+*.fbx    binary
+*.zip    binary
+*.7z     binary
+*.gz     binary
